@@ -1774,7 +1774,6 @@ async function dbCreateLocalOrder(draft) {
     if (e2) return e2.message;
     for (let i = 0; i < (item.rolls || []).length; i++) {
       const kg = parseFloat(item.rolls[i]) || 0;
-      if (kg <= 0) continue;
       const { error: e3 } = await sb.from('local_order_rolls').insert({
         local_order_item_id: oi.id, roll_number: i + 1, quantity: kg,
       });
@@ -1801,7 +1800,6 @@ async function dbSaveLocalOrderItems(orderId, items) {
     if (e2) return e2.message;
     for (let i = 0; i < (item.rolls || []).length; i++) {
       const kg = parseFloat(item.rolls[i]) || 0;
-      if (kg <= 0) continue;
       await sb.from('local_order_rolls').insert({
         local_order_item_id: oi.id, roll_number: i + 1, quantity: kg,
       });

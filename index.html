@@ -48,6 +48,8 @@
     }
     .tab-btn:hover { background: var(--gray-100); color: var(--gray-700); }
     .tab-btn.active { background: var(--blue-light); color: var(--blue); }
+    .subnav { display:flex; gap:4px; padding:8px 14px; background:var(--gray-50); border-bottom:1px solid var(--gray-200); flex-wrap:wrap; }
+    .subnav .tab-btn { font-size:12px; padding:5px 12px; }
     .nav-right { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
     .nav-user-name { font-size: 12px; color: var(--gray-500); white-space: nowrap; }
     @media (max-width: 420px) { .nav-user-name { display: none; } }
@@ -919,6 +921,84 @@ function vAdminLocales() {
     <div class="table-wrap">
       <table>
         <thead><tr><th>N°</th><th>Local</th><th>Cliente</th><th>Tipo</th><th style="text-align:right">Total</th><th>Despachado</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+
+// ── ADMIN VENDEDORES SECTION (with sub-nav) ───────────────────────────────────
+function vAdminVendSection() {
+  const sub = S.adminVendTab || 'equipo';
+  const badge = S.pendingCount>0 ? '<span style="background:#ef4444;color:white;border-radius:99px;padding:0 5px;font-size:10px;margin-left:4px">'+S.pendingCount+'</span>' : '';
+  const subNav = `<div class="subnav">
+    <button class="tab-btn ${sub==='equipo'?'active':''}"   data-admin-vend-tab="equipo">👤 Equipo</button>
+    <button class="tab-btn ${sub==='pedidos'?'active':''}"  data-admin-vend-tab="pedidos">📋 Pedidos${badge}</button>
+    <button class="tab-btn ${sub==='remitos'?'active':''}"  data-admin-vend-tab="remitos">🧾 Remitos</button>
+  </div>`;
+  let content = '';
+  if      (sub==='equipo')  content = vAdminVendedores();
+  else if (sub==='pedidos') content = vPedidos();
+  else if (sub==='remitos') content = vRemitos();
+  return subNav + content;
+}
+
+// ── ADMIN LOCALES SECTION ─────────────────────────────────────────────────────
+function vAdminLocalesSection() {
+  const locals  = S.locals || [];
+  if (!S.adminLocalId && locals.length>0) S.adminLocalId = locals[0].id;
+  const selId   = S.adminLocalId;
+  const subTab  = S.adminLocalSubTab || 'activos';
+
+  const storeBtns = locals.map(l=>
+    '<button class="tab-btn '+(l.id===selId?'active':'')+'" data-admin-local-id="'+l.id+'">'+(l.name||'Local')+'</button>'
+  ).join('');
+
+  const subNav2 = `<div class="subnav" style="background:white;border-top:none">
+    <button class="tab-btn ${subTab==='activos'?'active':''}"     data-admin-local-sub="activos">📋 Activos</button>
+    <button class="tab-btn ${subTab==='despachados'?'active':''}" data-admin-local-sub="despachados">📦 Despachados</button>
+    <span style="flex:1"></span>
+    <button class="btn btn-sm btn-secondary" id="btnReloadAdminLocal" style="margin:auto 0">↺ Actualizar</button>
+  </div>`;
+
+  if (!selId) return `<div class="subnav">${storeBtns}</div><div class="empty-state" style="padding:40px"><div class="empty-icon">🏪</div>Seleccioná un local</div>`;
+
+  const allOrders  = (S.localOrders||[]).filter(o=>o.local_id===selId);
+  const statusFilter = subTab==='activos'
+    ? o=>o.status==='borrador'||o.status==='pendiente'
+    : o=>o.status==='despachado'||o.status==='revisado';
+  const list = allOrders.filter(statusFilter).sort((a,b)=>(b.order_date||b.created_at||'').localeCompare(a.order_date||a.created_at||''));
+
+  const emptyIcon = subTab==='activos' ? '📋' : '📦';
+  const emptyMsg  = subTab==='activos' ? 'No hay pedidos activos' : 'No hay pedidos despachados';
+
+  const rows = list.length===0
+    ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">${emptyIcon}</div>${emptyMsg}</div></td></tr>`
+    : list.map(o=>{
+        const total=calcOrderTotal(o);
+        const statusBadge=`<span style="background:${
+          o.status==='borrador'?'var(--gray-400)':o.status==='pendiente'?'var(--blue)':o.status==='despachado'?'var(--orange, #f97316)':'var(--green)'
+        };color:white;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${o.status}</span>`;
+        const devBtn=(o.move_type==='devolucion'&&o.status==='despachado')
+          ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px">✅ Devuelto</button>`:'';
+        return `<tr style="cursor:pointer" data-local-order="${o.id}">
+          <td><strong>${o.order_number||'—'}</strong></td>
+          <td>${o.clients?.name||'<span style="color:var(--gray-400)">Sin cliente</span>'}</td>
+          <td>${pill(o.move_type)}</td>
+          <td>${statusBadge}</td>
+          <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
+          <td style="font-size:12px">${(o.order_date||o.created_at||'').slice(0,10)}</td>
+          <td style="display:flex;gap:4px">${devBtn}<button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
+        </tr>`;
+      }).join('');
+
+  return `<div class="subnav">${storeBtns}</div>
+  ${subNav2}
+  <div class="card" style="padding:0;margin-top:0;border-top:none;border-radius:0 0 var(--radius) var(--radius)">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -2952,6 +3032,8 @@ function vLocal() {
   if (S.localDispFilter === undefined) S.localDispFilter = 'revisar';
   if (S.localActivosSort === undefined) S.localActivosSort = {col:'fecha', dir:'desc'};
   if (S.localDispSort    === undefined) S.localDispSort    = {col:'fecha', dir:'desc'};
+  if (!S.activosFilters) S.activosFilters = {cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''};
+  if (!S.dispFilters)    S.dispFilters    = {cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''};
   const tab = S.localTab;
   const tabHtml = tabs.map(t => `<button class="tab-btn${tab===t.id?' active':''}" data-local-tab="${t.id}">${t.icon} ${t.label}</button>`).join('');
   let content = '';
@@ -3071,67 +3153,181 @@ function calcOrderTotal(o) {
 function sortLocalList(list, sort) {
   return [...list].sort((a,b)=>{
     let va, vb;
-    if (sort.col==='fecha')   { va=a.order_date||a.created_at||''; vb=b.order_date||b.created_at||''; }
+    if      (sort.col==='fecha')   { va=a.order_date||a.created_at||''; vb=b.order_date||b.created_at||''; }
     else if (sort.col==='cliente') { va=(a.clients?.name||'').toLowerCase(); vb=(b.clients?.name||'').toLowerCase(); }
     else if (sort.col==='monto')   { va=calcOrderTotal(a); vb=calcOrderTotal(b); }
+    else if (sort.col==='numero')  { va=a.order_number||''; vb=b.order_number||''; }
     else { va=''; vb=''; }
     if (va<vb) return sort.dir==='asc'?-1:1;
     if (va>vb) return sort.dir==='asc'?1:-1;
     return 0;
   });
 }
-function thSort(label, col, sort, dataAttr, align) {
-  const active = sort.col===col;
-  const icon = active ? (sort.dir==='asc'?'▲':'▼') : '⇅';
-  const as = align ? ';text-align:'+align : '';
-  return '<th style="cursor:pointer;user-select:none;white-space:nowrap'+as+'" data-'+dataAttr+'="'+col+'">'+label+' <span style="font-size:10px;opacity:'+(active?1:0.3)+'">'+icon+'</span></th>';
+function applyLocalFilters(list, f) {
+  if (!f) return list;
+  return list.filter(o=>{
+    const total = calcOrderTotal(o);
+    const fecha = (o.order_date||o.created_at||'').slice(0,10);
+    if (f.cliente && !(o.clients?.name||'').toLowerCase().includes(f.cliente.toLowerCase())) return false;
+    if (f.tipo?.length>0 && !f.tipo.includes(o.move_type)) return false;
+    if (f.fechaDesde && fecha<f.fechaDesde) return false;
+    if (f.fechaHasta && fecha>f.fechaHasta) return false;
+    if (f.montoMin && total<parseFloat(f.montoMin)) return false;
+    if (f.montoMax && total>parseFloat(f.montoMax)) return false;
+    return true;
+  });
 }
-function downloadCSV(filename, headers, rows) {
-  const bom = '﻿';
-  const esc = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
-  const csv = bom + [headers,...rows].map(r=>r.map(esc).join(',')).join('\r\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
-  a.download = filename; a.click();
+function countActiveFilters(f) {
+  if (!f) return 0;
+  let n=0;
+  if (f.cliente) n++;
+  if (f.tipo?.length>0) n++;
+  if (f.fechaDesde||f.fechaHasta) n++;
+  if (f.montoMin||f.montoMax) n++;
+  return n;
 }
-function printLocalTable(title, headers, rows) {
-  const th = headers.map(h=>'<th style="background:#1e40af;color:white;padding:6px 8px;text-align:left">'+h+'</th>').join('');
-  const tr = rows.map(r=>'<tr>'+r.map((c,i)=>'<td style="padding:5px 8px;border-bottom:1px solid #e5e7eb">'+c+'</td>').join('')+'</tr>').join('');
-  const w = window.open('','_blank','width=900,height=700');
-  w.document.write('<html><head><title>'+title+'</title><style>body{font-family:Arial,sans-serif;font-size:13px}table{border-collapse:collapse;width:100%}@media print{button{display:none}}</style></head><body>');
-  w.document.write('<h2>'+title+'</h2><button onclick="window.print()">🖨️ Imprimir</button><br><br>');
-  w.document.write('<table><thead><tr>'+th+'</tr></thead><tbody>'+tr+'</tbody></table></body></html>');
-  w.document.close();
+function downloadCSV(filename, lines) {
+  const bom='﻿';
+  const esc=v=>'"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const csv=bom+lines.map(r=>r.map(esc).join(',')).join('\r\n');
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download=filename; a.click();
 }
-function exportLocalOrderDetailCSV(o) {
-  const headers = ['ARTICULO','Color','R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','Cantidad','Kilos','Precio','Subtotal'];
-  const rows = (o.local_order_items||[]).map(item=>{
+function buildOrderDetailRows(o) {
+  return (o.local_order_items||[]).map(item=>{
     const prod=(S.products||[]).find(p=>(p.product_colors||[]).some(c=>c.id===item.product_color_id));
     const pc=(prod?.product_colors||[]).find(c=>c.id===item.product_color_id);
     const rolls=(item.local_order_rolls||[]).slice().sort((a,b)=>a.roll_number-b.roll_number);
     const totalKg=rolls.reduce((s,r)=>s+parseFloat(r.quantity||0),0);
     const totalRolls=rolls.filter(r=>parseFloat(r.quantity||0)>0).length;
     const price=parseFloat(item.price||0);
-    const rollKgs=Array.from({length:10},(_,i)=>{const r=rolls.find(x=>x.roll_number===i+1);return r?parseFloat(r.quantity||0):'';});
-    return [prod?.name||'',pc?.color||'',...rollKgs,totalRolls,totalKg.toFixed(2),price.toFixed(2),(totalKg*price).toFixed(2)];
+    const rkgs=Array.from({length:10},(_,i)=>{const r=rolls.find(x=>x.roll_number===i+1);const kg=r?parseFloat(r.quantity||0):0;return kg>0?kg.toFixed(1):'';});
+    return {art:prod?.name||'', color:pc?.color||'', rkgs, totalRolls, totalKg, price, subtotal:totalKg*price};
   });
-  downloadCSV((o.order_number||'pedido')+'_detalle.csv', headers, rows);
+}
+function exportListCSV(filtered, withDetail, filename) {
+  const lines=[];
+  if (withDetail) {
+    filtered.forEach(o=>{
+      lines.push(['=== PEDIDO','CLIENTE','TIPO','ESTADO','FECHA','TOTAL']);
+      lines.push([o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', (o.order_date||o.created_at||'').slice(0,10), calcOrderTotal(o).toFixed(2)]);
+      lines.push(['ARTICULO','COLOR','R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','CANT','KILOS','PRECIO','SUBTOTAL']);
+      buildOrderDetailRows(o).forEach(r=>{
+        lines.push([r.art,r.color,...r.rkgs,r.totalRolls,r.totalKg.toFixed(2),r.price.toFixed(2),r.subtotal.toFixed(2)]);
+      });
+      lines.push([]);
+    });
+  } else {
+    lines.push(['N\xb0','CLIENTE','TIPO','ESTADO','TOTAL','FECHA']);
+    filtered.forEach(o=>{
+      lines.push([o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', calcOrderTotal(o).toFixed(2), (o.order_date||o.created_at||'').slice(0,10)]);
+    });
+  }
+  downloadCSV(filename, lines);
+}
+function exportListPDF(filtered, withDetail, title) {
+  let body='';
+  if (withDetail) {
+    filtered.forEach(o=>{
+      const drows=buildOrderDetailRows(o);
+      let gT=0,gK=0;
+      const trs=drows.map(r=>{gT+=r.subtotal;gK+=r.totalKg;
+        return '<tr>'+'<td style="padding:3px 6px;font-weight:600">'+r.art+'</td><td style="padding:3px 6px">'+r.color+'</td>'
+          +r.rkgs.map(k=>'<td style="padding:3px 4px;text-align:right">'+k+'</td>').join('')
+          +'<td style="padding:3px 6px;text-align:right">'+r.totalRolls+'</td>'
+          +'<td style="padding:3px 6px;text-align:right">'+r.totalKg.toFixed(2)+'</td>'
+          +'<td style="padding:3px 6px;text-align:right">'+r.price.toLocaleString('es-AR',{minimumFractionDigits:2})+'</td>'
+          +'<td style="padding:3px 6px;text-align:right;font-weight:600">'+r.subtotal.toLocaleString('es-AR',{minimumFractionDigits:2})+'</td>'
+          +'</tr>';
+      }).join('');
+      const fecha=(o.order_date||o.created_at||'').slice(0,10);
+      body+='<div style="margin-bottom:24px;page-break-inside:avoid">'
+        +'<h3 style="margin:0 0 6px;color:#1e3a8a;font-size:14px">'+(o.order_number||'')+' &nbsp;&middot;&nbsp; '+(o.clients?.name||'Sin cliente')+' &nbsp;&middot;&nbsp; '+(o.move_type||'')+' &nbsp;&middot;&nbsp; '+fecha+'</h3>'
+        +'<table style="width:100%;border-collapse:collapse;font-size:11px">'
+        +'<thead><tr style="background:#1e3a8a;color:white">'
+        +'<th style="padding:4px 6px;text-align:left">Art\xedculo</th><th style="padding:4px 6px;text-align:left">Color</th>'
+        +[1,2,3,4,5,6,7,8,9,10].map(n=>'<th style="padding:4px 4px;text-align:right">'+n+'</th>').join('')
+        +'<th style="padding:4px 6px;text-align:right">Cant</th><th style="padding:4px 6px;text-align:right">Kilos</th><th style="padding:4px 6px;text-align:right">Precio</th><th style="padding:4px 6px;text-align:right">Subtotal</th>'
+        +'</tr></thead><tbody>'+trs+'</tbody>'
+        +'<tfoot><tr style="background:#f1f5f9;font-weight:700"><td colspan="14" style="padding:4px 6px;text-align:right">TOTAL</td>'
+        +'<td style="padding:4px 6px;text-align:right">'+gK.toFixed(2)+'</td><td></td>'
+        +'<td style="padding:4px 6px;text-align:right;color:#1e3a8a">'+gT.toLocaleString('es-AR',{minimumFractionDigits:2})+'</td>'
+        +'</tr></tfoot></table></div>';
+    });
+  } else {
+    body+='<table style="width:100%;border-collapse:collapse;font-size:12px">'
+      +'<thead><tr style="background:#1e3a8a;color:white">'
+      +'<th style="padding:6px 8px;text-align:left">N\xb0</th><th style="padding:6px 8px">Cliente</th><th style="padding:6px 8px">Tipo</th><th style="padding:6px 8px">Estado</th><th style="padding:6px 8px;text-align:right">Total</th><th style="padding:6px 8px">Fecha</th>'
+      +'</tr></thead><tbody>';
+    filtered.forEach(o=>{
+      body+='<tr style="border-bottom:1px solid #e2e8f0">'
+        +'<td style="padding:5px 8px;font-weight:600">'+(o.order_number||'')+'</td>'
+        +'<td style="padding:5px 8px">'+(o.clients?.name||'')+'</td>'
+        +'<td style="padding:5px 8px">'+(o.move_type||'')+'</td>'
+        +'<td style="padding:5px 8px">'+(o.status||'')+'</td>'
+        +'<td style="padding:5px 8px;text-align:right">'+calcOrderTotal(o).toLocaleString('es-AR',{minimumFractionDigits:2})+'</td>'
+        +'<td style="padding:5px 8px">'+((o.order_date||o.created_at||'').slice(0,10))+'</td></tr>';
+    });
+    body+='</tbody></table>';
+  }
+  const w=window.open('','_blank','width=1050,height=780');
+  w.document.write('<html><head><title>'+title+'</title>'
+    +'<style>body{font-family:Arial,sans-serif;margin:24px;color:#1e293b}h2{color:#1e3a8a}@media print{.noprint{display:none}}</style></head><body>'
+    +'<h2>'+title+'</h2>'
+    +'<div class="noprint" style="margin-bottom:16px">'
+    +'<button onclick="window.print()" style="padding:8px 18px;background:#1e3a8a;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px">🖨️ Imprimir / Guardar como PDF</button></div>'
+    +body+'</body></html>');
+  w.document.close();
 }
 
 function vLocalActivos() {
-  const sq   = (S.localActivosSearch||'').toLowerCase().trim();
-  const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
-  const activos = (S.localOrders||[]).filter(o => o.status === 'borrador' || o.status === 'pendiente');
-  let filtered = sq
-    ? activos.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
-    : activos;
+  const filters = S.activosFilters  || {cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''};
+  const sort    = S.localActivosSort || {col:'fecha', dir:'desc'};
+  const showF   = !!S.activosShowFilters;
+  const showS   = !!S.activosShowSort;
+  const withDet = !!S.activosExportDetalle;
+  const sq      = (S.localActivosSearch||'').toLowerCase().trim();
+
+  const activos = (S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+  let filtered  = sq ? activos.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : activos;
+  filtered = applyLocalFilters(filtered, filters);
   filtered = sortLocalList(filtered, sort);
-  const rows = filtered.length === 0
-    ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📋</div>${sq ? 'Sin resultados' : 'No hay pedidos activos'}</div></td></tr>`
-    : filtered.map(o => {
-        const total = calcOrderTotal(o);
-        const stColor = o.status==='borrador' ? 'var(--gray-400)' : 'var(--blue)';
-        const stLabel = o.status==='borrador' ? 'Borrador' : 'Pendiente';
+
+  const fc = countActiveFilters(filters);
+  const badge = fc>0 ? '<span style="background:#3b82f6;color:white;border-radius:99px;padding:0 5px;font-size:10px;margin-left:3px">'+fc+'</span>' : '';
+
+  const tipos=['venta','reserva','devolucion'];
+  const tipoL={venta:'Venta',reserva:'Reserva',devolucion:'Dev.'};
+  const activeTipos=filters.tipo||[];
+  const tipoBtns=tipos.map(t=>'<button class="btn btn-sm '+(activeTipos.includes(t)?'btn-primary':'btn-secondary')+'" data-af-tipo="'+t+'">'+tipoL[t]+'</button>').join('');
+
+  const filterPanel = showF ? `<div style="background:var(--gray-50);border-top:1px solid var(--gray-200);padding:12px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Cliente</div><input type="text" id="fAFCliente" value="${filters.cliente||''}" placeholder="Nombre..." style="width:140px"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Tipo</div><div style="display:flex;gap:4px">${tipoBtns}</div></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha desde</div><input type="date" id="fAFDesde" value="${filters.fechaDesde||''}"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha hasta</div><input type="date" id="fAFHasta" value="${filters.fechaHasta||''}"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto mín.</div><input type="number" id="fAFMontoMin" value="${filters.montoMin||''}" placeholder="0" style="width:90px"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto máx.</div><input type="number" id="fAFMontoMax" value="${filters.montoMax||''}" placeholder="∞" style="width:90px"></div>
+    <button class="btn btn-sm btn-secondary" id="btnAFClear">🗑️ Limpiar</button>
+  </div>` : '';
+
+  const sortCols=[{id:'fecha',lb:'Fecha'},{id:'cliente',lb:'Cliente'},{id:'monto',lb:'Monto'},{id:'numero',lb:'N°'}];
+  const sortPanel = showS ? `<div style="background:var(--gray-50);border-top:1px solid var(--gray-200);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:12px;font-weight:600;color:var(--gray-600)">Ordenar por:</span>
+    <div style="display:flex;gap:4px">${sortCols.map(c=>'<button class="btn btn-sm '+(sort.col===c.id?'btn-primary':'btn-secondary')+'" data-as-col="'+c.id+'">'+c.lb+'</button>').join('')}</div>
+    <div style="display:flex;gap:4px">
+      <button class="btn btn-sm ${sort.dir==='asc'?'btn-primary':'btn-secondary'}" data-as-dir="asc">▲ Asc</button>
+      <button class="btn btn-sm ${sort.dir==='desc'?'btn-primary':'btn-secondary'}" data-as-dir="desc">▼ Desc</button>
+    </div>
+  </div>` : '';
+
+  const rows = filtered.length===0
+    ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📋</div>${sq||fc>0?'Sin resultados para los filtros aplicados':'No hay pedidos activos'}</div></td></tr>`
+    : filtered.map(o=>{
+        const total=calcOrderTotal(o);
+        const stColor=o.status==='borrador'?'var(--gray-400)':'var(--blue)';
+        const stLabel=o.status==='borrador'?'Borrador':'Pendiente';
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
           <td><strong>${o.order_number||'—'}</strong></td>
           <td>${o.clients?.name||'<span style="color:var(--gray-400)">Sin cliente</span>'}</td>
@@ -3142,27 +3338,26 @@ function vLocalActivos() {
           <td><button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
         </tr>`;
       }).join('');
+
   return `
-  <div class="card">
-    <div class="card-header" style="flex-wrap:wrap;gap:8px">
-      <input type="text" id="fLocalActivosSearch" placeholder="🔍 Buscar pedido o cliente..." value="${S.localActivosSearch||''}" style="max-width:230px">
+  <div class="card" style="padding:0">
+    <div class="card-header" style="flex-wrap:wrap;gap:8px;padding:12px 16px">
+      <input type="text" id="fLocalActivosSearch" placeholder="🔍 Buscar N° o cliente..." value="${S.localActivosSearch||''}" style="max-width:210px">
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <button class="btn btn-sm btn-secondary" id="btnExportActivosCSV" title="Exportar a Excel">📊 Excel</button>
-        <button class="btn btn-sm btn-secondary" id="btnExportActivosPDF" title="Imprimir / PDF">🖨️ PDF</button>
+        <button class="btn btn-sm ${showF?'btn-primary':'btn-secondary'}" id="btnAFToggle">⚙️ Filtrar${badge}</button>
+        <button class="btn btn-sm ${showS?'btn-primary':'btn-secondary'}" id="btnASToggle">⇕ Ordenar</button>
+        <label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;padding:0 4px">
+          <input type="checkbox" id="cbAExportDet" ${withDet?'checked':''}> Con detalle
+        </label>
+        <button class="btn btn-sm btn-secondary" id="btnExportActivosCSV">📊 Excel</button>
+        <button class="btn btn-sm btn-secondary" id="btnExportActivosPDF">🖨️ PDF</button>
         <button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>
       </div>
     </div>
+    ${filterPanel}${sortPanel}
     <div class="table-wrap">
       <table>
-        <thead><tr>
-          <th>N°</th>
-          ${thSort('Cliente','cliente',sort,'activos-sort')}
-          <th>Tipo</th>
-          <th>Estado</th>
-          ${thSort('Total','monto',sort,'activos-sort','right')}
-          ${thSort('Fecha','fecha',sort,'activos-sort')}
-          <th></th>
-        </tr></thead>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -3259,23 +3454,55 @@ function mLocalOrderDetail() {
 
 // ── DESPACHADOS TAB ───────────────────────────────────────────────────────────
 function vLocalDespachados() {
-  const filter = S.localDispFilter || 'revisar';
-  const sort   = S.localDispSort   || {col:'fecha', dir:'desc'};
-  const statusMap = { revisar: 'despachado', check: 'revisado' };
-  const targetStatus = statusMap[filter] || 'despachado';
-  const sq = (S.localDispSearch||'').toLowerCase().trim();
-  const list = (S.localOrders||[]).filter(o => o.status === targetStatus);
-  let filtered = sq
-    ? list.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
-    : list;
-  filtered = sortLocalList(filtered, sort);
-  const rows = filtered.length === 0
-    ? `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📦</div>Sin pedidos en esta sección</div></td></tr>`
-    : filtered.map(o => {
-        const total = calcOrderTotal(o);
-        const devueltoBtn = (o.move_type === 'devolucion' && o.status === 'despachado')
-          ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" style="padding:2px 8px;font-size:11px" onclick="event.stopPropagation()">✅ Devuelto</button>`
-          : '';
+  const filter  = S.localDispFilter || 'revisar';
+  const filters = S.dispFilters     || {cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''};
+  const sort    = S.localDispSort   || {col:'fecha', dir:'desc'};
+  const showF   = !!S.dispShowFilters;
+  const showS   = !!S.dispShowSort;
+  const withDet = !!S.dispExportDetalle;
+  const statusMap={revisar:'despachado',check:'revisado'};
+  const targetStatus=statusMap[filter]||'despachado';
+  const sq=(S.localDispSearch||'').toLowerCase().trim();
+
+  const list=(S.localOrders||[]).filter(o=>o.status===targetStatus);
+  let filtered=sq?list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)):list;
+  filtered=applyLocalFilters(filtered,filters);
+  filtered=sortLocalList(filtered,sort);
+
+  const fc=countActiveFilters(filters);
+  const badge=fc>0?'<span style="background:#3b82f6;color:white;border-radius:99px;padding:0 5px;font-size:10px;margin-left:3px">'+fc+'</span>':'';
+
+  const tipos=['venta','reserva','devolucion'];
+  const tipoL={venta:'Venta',reserva:'Reserva',devolucion:'Dev.'};
+  const activeTipos=filters.tipo||[];
+  const tipoBtns=tipos.map(t=>'<button class="btn btn-sm '+(activeTipos.includes(t)?'btn-primary':'btn-secondary')+'" data-df-tipo="'+t+'">'+tipoL[t]+'</button>').join('');
+
+  const filterPanel = showF ? `<div style="background:var(--gray-50);border-top:1px solid var(--gray-200);padding:12px 16px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Cliente</div><input type="text" id="fDFCliente" value="${filters.cliente||''}" placeholder="Nombre..." style="width:140px"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Tipo</div><div style="display:flex;gap:4px">${tipoBtns}</div></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha desde</div><input type="date" id="fDFDesde" value="${filters.fechaDesde||''}"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha hasta</div><input type="date" id="fDFHasta" value="${filters.fechaHasta||''}"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto mín.</div><input type="number" id="fDFMontoMin" value="${filters.montoMin||''}" placeholder="0" style="width:90px"></div>
+    <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto máx.</div><input type="number" id="fDFMontoMax" value="${filters.montoMax||''}" placeholder="∞" style="width:90px"></div>
+    <button class="btn btn-sm btn-secondary" id="btnDFClear">🗑️ Limpiar</button>
+  </div>` : '';
+
+  const sortCols=[{id:'fecha',lb:'Fecha'},{id:'cliente',lb:'Cliente'},{id:'monto',lb:'Monto'},{id:'numero',lb:'N°'}];
+  const sortPanel = showS ? `<div style="background:var(--gray-50);border-top:1px solid var(--gray-200);padding:10px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+    <span style="font-size:12px;font-weight:600;color:var(--gray-600)">Ordenar por:</span>
+    <div style="display:flex;gap:4px">${sortCols.map(c=>'<button class="btn btn-sm '+(sort.col===c.id?'btn-primary':'btn-secondary')+'" data-ds-col="'+c.id+'">'+c.lb+'</button>').join('')}</div>
+    <div style="display:flex;gap:4px">
+      <button class="btn btn-sm ${sort.dir==='asc'?'btn-primary':'btn-secondary'}" data-ds-dir="asc">▲ Asc</button>
+      <button class="btn btn-sm ${sort.dir==='desc'?'btn-primary':'btn-secondary'}" data-ds-dir="desc">▼ Desc</button>
+    </div>
+  </div>` : '';
+
+  const rows = filtered.length===0
+    ? `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📦</div>${sq||fc>0?'Sin resultados para los filtros aplicados':'Sin pedidos en esta sección'}</div></td></tr>`
+    : filtered.map(o=>{
+        const total=calcOrderTotal(o);
+        const devueltoBtn=(o.move_type==='devolucion'&&o.status==='despachado')
+          ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" style="padding:2px 8px;font-size:11px" onclick="event.stopPropagation()">✅ Devuelto</button>`:'';
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
           <td><strong>${o.order_number||'—'}</strong></td>
           <td>${o.clients?.name||'—'}</td>
@@ -3287,36 +3514,35 @@ function vLocalDespachados() {
           <td><button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
         </tr>`;
       }).join('');
+
   return `
-  <div class="card">
-    <div class="card-header" style="flex-wrap:wrap;gap:8px">
+  <div class="card" style="padding:0">
+    <div class="card-header" style="flex-wrap:wrap;gap:8px;padding:12px 16px">
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-sm ${filter==='revisar'?'btn-primary':'btn-secondary'}" data-local-disp-filter="revisar">⏳ Por revisar</button>
         <button class="btn btn-sm ${filter==='check'?'btn-primary':'btn-secondary'}" data-local-disp-filter="check">✅ Revisados</button>
       </div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <input type="text" id="fLocalDispSearch" placeholder="🔍 Buscar..." value="${S.localDispSearch||''}" style="max-width:190px">
-        <button class="btn btn-sm btn-secondary" id="btnExportDispCSV" title="Exportar a Excel">📊 Excel</button>
-        <button class="btn btn-sm btn-secondary" id="btnExportDispPDF" title="Imprimir / PDF">🖨️ PDF</button>
+        <input type="text" id="fLocalDispSearch" placeholder="🔍 Buscar..." value="${S.localDispSearch||''}" style="max-width:170px">
+        <button class="btn btn-sm ${showF?'btn-primary':'btn-secondary'}" id="btnDFToggle">⚙️ Filtrar${badge}</button>
+        <button class="btn btn-sm ${showS?'btn-primary':'btn-secondary'}" id="btnDSToggle">⇕ Ordenar</button>
+        <label style="font-size:11px;display:flex;align-items:center;gap:3px;cursor:pointer;white-space:nowrap;padding:0 4px">
+          <input type="checkbox" id="cbDExportDet" ${withDet?'checked':''}> Con detalle
+        </label>
+        <button class="btn btn-sm btn-secondary" id="btnExportDispCSV">📊 Excel</button>
+        <button class="btn btn-sm btn-secondary" id="btnExportDispPDF">🖨️ PDF</button>
       </div>
     </div>
+    ${filterPanel}${sortPanel}
     <div class="table-wrap">
       <table>
-        <thead><tr>
-          <th>N°</th>
-          ${thSort('Cliente','cliente',sort,'disp-sort')}
-          <th>Tipo</th>
-          <th>Estado</th>
-          ${thSort('Total','monto',sort,'disp-sort','right')}
-          ${thSort('Fecha','fecha',sort,'disp-sort')}
-          <th></th>
-          <th></th>
-        </tr></thead>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
   </div>`;
 }
+
 
 // ── MODAL: Day detail from calendar ──────────────────────────────────────────
 function mLocalDay() {
@@ -3787,27 +4013,35 @@ async function draw() {
     else                                     content = vCalendar();
   } else {
     // admin or owner
-    tabs = [
-      { id:'acciones',   icon:'✅', label:'Acciones'  },
-      { id:'vendedores', icon:'👤', label:'Vendedores' },
-      { id:'clientes',   icon:'👥', label:'Clientes'   },
-      { id:'reportes',   icon:'📊', label:'Reportes'   },
-    ];
     if (isBulltex()) {
-      tabs.push({ id:'stock',   icon:'🧵', label:'Stock' });
-      tabs.push({ id:'pedidos', icon:'📋', label:'Pedidos', badge: S.pendingCount||null });
-      tabs.push({ id:'remitos', icon:'🧾', label:'Remitos' });
+      tabs = [
+        { id:'acciones',    icon:'✅', label:'Acciones'    },
+        { id:'vendedores',  icon:'👤', label:'Vendedores',  badge: S.pendingCount||null },
+        { id:'clientes',    icon:'👥', label:'Clientes'     },
+        { id:'locales',     icon:'🏪', label:'Locales'      },
+        { id:'reportes',    icon:'📊', label:'Reportes'     },
+        { id:'stock',       icon:'🧵', label:'Stock'        },
+        { id:'micalendario',icon:'📅', label:'Mi Calendario'},
+        { id:'micartera',   icon:'🗂',  label:'Mi Cartera'  },
+      ];
+    } else {
+      tabs = [
+        { id:'acciones',    icon:'✅', label:'Acciones'    },
+        { id:'vendedores',  icon:'👤', label:'Vendedores'  },
+        { id:'clientes',    icon:'👥', label:'Clientes'     },
+        { id:'reportes',    icon:'📊', label:'Reportes'     },
+        { id:'micalendario',icon:'📅', label:'Mi Calendario'},
+        { id:'micartera',   icon:'🗂',  label:'Mi Cartera'  },
+      ];
     }
-    tabs.push({ id:'micalendario', icon:'📅', label:'Mi Calendario' });
-    tabs.push({ id:'micartera',    icon:'🗂',  label:'Mi Cartera'   });
     switch (tab) {
-      case 'vendedores':   content = vAdminVendedores(); break;
+      case 'vendedores':   content = isBulltex() ? vAdminVendSection() : vAdminVendedores(); break;
       case 'clientes':     content = vAdminClientes(); break;
-    case 'locales':      content = vAdminLocales(); break;
+      case 'locales':      content = isBulltex() ? vAdminLocalesSection() : vAdminLocales(); break;
       case 'reportes':     content = vAdminReportes(); break;
       case 'stock':        content = isBulltex() ? vStock()   : ''; break;
       case 'pedidos':      content = isBulltex() ? vPedidos() : ''; break;
-      case 'remitos':      content = isBulltex() ? vRemitos()  : ''; break;
+      case 'remitos':      content = isBulltex() ? vRemitos() : ''; break;
       case 'micalendario': content = vCalendar(); break;
       case 'micartera':    content = vMyClients(); break;
       default:             content = vAdminAcciones(); break;
@@ -3830,9 +4064,10 @@ async function draw() {
     remitoDetail:    mRemitoDetail(),
     editStock:       mEditStock(),
     cuentaCorriente: mCuentaCorriente(),
-    localOrder:      mLocalOrder(),
-    localDispatch:   mLocalDispatch(),
-    adminLocalReview: mAdminLocalReview(),
+    localOrder:        mLocalOrder(),
+    localDispatch:     mLocalDispatch(),
+    adminLocalReview:  mAdminLocalReview(),
+    localOrderDetail:  mLocalOrderDetail(),
   }[modal] || '';
   if (modalHtml) app.insertAdjacentHTML('beforeend', modalHtml);
 
@@ -3848,7 +4083,8 @@ function bindAll() {
     S.tab = b.dataset.tab;
     if (['acciones','reportes'].includes(S.tab)) await dbActions(S.year, S.month);
     if (S.tab==='clientes')     { await dbClients('all'); await dbSellers(); await dbCompanies(); }
-    if (S.tab==='locales')      { await dbLocalOrders(null); await dbLocals(); }
+    if (S.tab==='locales')      { await dbLocalOrders(null); await dbLocals(); S.adminLocalSubTab = S.adminLocalSubTab||'activos'; }
+    if (S.tab==='vendedores' && !S.adminVendTab) S.adminVendTab = 'equipo';
     if (S.tab==='vendedores')   { await dbSellers(); await dbClients('all'); await dbCompanies(); }
     if (S.tab==='micalendario') { await dbClients(S.profile.id); await dbActions(S.year, S.month); }
     if (S.tab==='micartera')    { await dbClients(S.profile.id); }
@@ -3858,7 +4094,37 @@ function bindAll() {
     draw();
   }));
 
+  // ADMIN: Vendedores sub-tabs
+  document.querySelectorAll('[data-admin-vend-tab]').forEach(b=>b.addEventListener('click', async ()=>{
+    const sub = b.dataset.adminVendTab;
+    S.adminVendTab = sub;
+    if (sub==='pedidos' && isBulltex()) await dbOrders();
+    if (sub==='remitos' && isBulltex()) await Promise.all([dbOrders(), dbRemitos()]);
+    if (sub==='equipo') { await dbSellers(); await dbClients('all'); }
+    draw();
+  }));
+
+  // ADMIN: Locales store selector
+  document.querySelectorAll('[data-admin-local-id]').forEach(b=>b.addEventListener('click', ()=>{
+    S.adminLocalId = b.dataset.adminLocalId;
+    S.adminLocalSubTab = S.adminLocalSubTab || 'activos';
+    draw();
+  }));
+
+  // ADMIN: Locales sub-tab (activos/despachados)
+  document.querySelectorAll('[data-admin-local-sub]').forEach(b=>b.addEventListener('click', ()=>{
+    S.adminLocalSubTab = b.dataset.adminLocalSub;
+    draw();
+  }));
+
+  // ADMIN: Reload local orders
+  document.getElementById('btnReloadAdminLocal')?.addEventListener('click', async ()=>{
+    await dbLocalOrders(null);
+    draw();
+  });
+
   // LOGOUT
+
   document.getElementById('btnLogout')?.addEventListener('click', async () => {
     await sb.auth.signOut();
     Object.assign(S, { view:'login', user:null, profile:null, sellers:[], clients:[], actions:[], products:[], orders:[], pendingCount:0 });
@@ -5019,96 +5285,98 @@ function bindAll() {
     S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
   }));
 
-  // Sort columns — Activos
-  document.querySelectorAll('[data-activos-sort]').forEach(th => th.addEventListener('click', () => {
-    const col = th.dataset.activosSort;
-    const cur = S.localActivosSort || {col:'fecha', dir:'desc'};
-    S.localActivosSort = {col, dir: cur.col===col && cur.dir==='asc' ? 'desc' : 'asc'};
+  // ── ACTIVOS: filter/sort/export handlers ─────────────────────────────────────
+  document.getElementById('btnAFToggle')?.addEventListener('click',()=>{ S.activosShowFilters=!S.activosShowFilters; draw(); });
+  document.getElementById('btnASToggle')?.addEventListener('click',()=>{ S.activosShowSort=!S.activosShowSort; draw(); });
+  document.getElementById('btnAFClear')?.addEventListener('click',()=>{ S.activosFilters={cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''}; draw(); });
+  document.getElementById('fAFCliente')?.addEventListener('change',e=>{ if(!S.activosFilters)S.activosFilters={}; S.activosFilters.cliente=e.target.value; draw(); });
+  document.getElementById('fAFDesde')?.addEventListener('change',e=>{ if(!S.activosFilters)S.activosFilters={}; S.activosFilters.fechaDesde=e.target.value; draw(); });
+  document.getElementById('fAFHasta')?.addEventListener('change',e=>{ if(!S.activosFilters)S.activosFilters={}; S.activosFilters.fechaHasta=e.target.value; draw(); });
+  document.getElementById('fAFMontoMin')?.addEventListener('change',e=>{ if(!S.activosFilters)S.activosFilters={}; S.activosFilters.montoMin=e.target.value; draw(); });
+  document.getElementById('fAFMontoMax')?.addEventListener('change',e=>{ if(!S.activosFilters)S.activosFilters={}; S.activosFilters.montoMax=e.target.value; draw(); });
+  document.querySelectorAll('[data-af-tipo]').forEach(b=>b.addEventListener('click',()=>{
+    if (!S.activosFilters) S.activosFilters={};
+    if (!S.activosFilters.tipo) S.activosFilters.tipo=[];
+    const t=b.dataset.afTipo;
+    S.activosFilters.tipo=S.activosFilters.tipo.includes(t)?S.activosFilters.tipo.filter(x=>x!==t):[...S.activosFilters.tipo,t];
     draw();
   }));
-
-  // Sort columns — Despachados
-  document.querySelectorAll('[data-disp-sort]').forEach(th => th.addEventListener('click', () => {
-    const col = th.dataset.dispSort;
-    const cur = S.localDispSort || {col:'fecha', dir:'desc'};
-    S.localDispSort = {col, dir: cur.col===col && cur.dir==='asc' ? 'desc' : 'asc'};
+  document.querySelectorAll('[data-as-col]').forEach(b=>b.addEventListener('click',()=>{
+    if(!S.localActivosSort)S.localActivosSort={col:'fecha',dir:'desc'};
+    S.localActivosSort={col:b.dataset.asCol, dir:S.localActivosSort.dir};
     draw();
   }));
-
-  // Export Activos — CSV
-  document.getElementById('btnExportActivosCSV')?.addEventListener('click', () => {
-    const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
-    const sq = (S.localActivosSearch||'').toLowerCase().trim();
-    const activos = (S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
-    let filtered = sq ? activos.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : activos;
-    filtered = sortLocalList(filtered, sort);
-    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
-    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', calcOrderTotal(o).toFixed(2), (o.order_date||o.created_at||'').slice(0,10)]);
-    downloadCSV('pedidos_activos.csv', headers, rows);
+  document.querySelectorAll('[data-as-dir]').forEach(b=>b.addEventListener('click',()=>{
+    if(!S.localActivosSort)S.localActivosSort={col:'fecha',dir:'desc'};
+    S.localActivosSort={col:S.localActivosSort.col, dir:b.dataset.asDir};
+    draw();
+  }));
+  document.getElementById('cbAExportDet')?.addEventListener('change',e=>{ S.activosExportDetalle=e.target.checked; });
+  document.getElementById('btnExportActivosCSV')?.addEventListener('click',()=>{
+    const filters=S.activosFilters||{}; const sort=S.localActivosSort||{col:'fecha',dir:'desc'};
+    const sq=(S.localActivosSearch||'').toLowerCase().trim();
+    let list=(S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
+    list=sortLocalList(applyLocalFilters(list,filters),sort);
+    exportListCSV(list,!!S.activosExportDetalle,'pedidos_activos.csv');
+  });
+  document.getElementById('btnExportActivosPDF')?.addEventListener('click',()=>{
+    const filters=S.activosFilters||{}; const sort=S.localActivosSort||{col:'fecha',dir:'desc'};
+    const sq=(S.localActivosSearch||'').toLowerCase().trim();
+    let list=(S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
+    list=sortLocalList(applyLocalFilters(list,filters),sort);
+    exportListPDF(list,!!S.activosExportDetalle,'Pedidos Activos');
   });
 
-  // Export Activos — PDF
-  document.getElementById('btnExportActivosPDF')?.addEventListener('click', () => {
-    const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
-    const sq = (S.localActivosSearch||'').toLowerCase().trim();
-    const activos = (S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
-    let filtered = sq ? activos.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : activos;
-    filtered = sortLocalList(filtered, sort);
-    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
-    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', '$ '+calcOrderTotal(o).toLocaleString('es-AR',{minimumFractionDigits:2}), (o.order_date||o.created_at||'').slice(0,10)]);
-    printLocalTable('Pedidos Activos', headers, rows);
+  // ── DESPACHADOS: filter/sort/export handlers ──────────────────────────────────
+  document.getElementById('btnDFToggle')?.addEventListener('click',()=>{ S.dispShowFilters=!S.dispShowFilters; draw(); });
+  document.getElementById('btnDSToggle')?.addEventListener('click',()=>{ S.dispShowSort=!S.dispShowSort; draw(); });
+  document.getElementById('btnDFClear')?.addEventListener('click',()=>{ S.dispFilters={cliente:'',tipo:[],fechaDesde:'',fechaHasta:'',montoMin:'',montoMax:''}; draw(); });
+  document.getElementById('fDFCliente')?.addEventListener('change',e=>{ if(!S.dispFilters)S.dispFilters={}; S.dispFilters.cliente=e.target.value; draw(); });
+  document.getElementById('fDFDesde')?.addEventListener('change',e=>{ if(!S.dispFilters)S.dispFilters={}; S.dispFilters.fechaDesde=e.target.value; draw(); });
+  document.getElementById('fDFHasta')?.addEventListener('change',e=>{ if(!S.dispFilters)S.dispFilters={}; S.dispFilters.fechaHasta=e.target.value; draw(); });
+  document.getElementById('fDFMontoMin')?.addEventListener('change',e=>{ if(!S.dispFilters)S.dispFilters={}; S.dispFilters.montoMin=e.target.value; draw(); });
+  document.getElementById('fDFMontoMax')?.addEventListener('change',e=>{ if(!S.dispFilters)S.dispFilters={}; S.dispFilters.montoMax=e.target.value; draw(); });
+  document.querySelectorAll('[data-df-tipo]').forEach(b=>b.addEventListener('click',()=>{
+    if(!S.dispFilters)S.dispFilters={};
+    if(!S.dispFilters.tipo)S.dispFilters.tipo=[];
+    const t=b.dataset.dfTipo;
+    S.dispFilters.tipo=S.dispFilters.tipo.includes(t)?S.dispFilters.tipo.filter(x=>x!==t):[...S.dispFilters.tipo,t];
+    draw();
+  }));
+  document.querySelectorAll('[data-ds-col]').forEach(b=>b.addEventListener('click',()=>{
+    if(!S.localDispSort)S.localDispSort={col:'fecha',dir:'desc'};
+    S.localDispSort={col:b.dataset.dsCol, dir:S.localDispSort.dir};
+    draw();
+  }));
+  document.querySelectorAll('[data-ds-dir]').forEach(b=>b.addEventListener('click',()=>{
+    if(!S.localDispSort)S.localDispSort={col:'fecha',dir:'desc'};
+    S.localDispSort={col:S.localDispSort.col, dir:b.dataset.dsDir};
+    draw();
+  }));
+  document.getElementById('cbDExportDet')?.addEventListener('change',e=>{ S.dispExportDetalle=e.target.checked; });
+  document.getElementById('btnExportDispCSV')?.addEventListener('click',()=>{
+    const filter=S.localDispFilter||'revisar'; const statusMap={revisar:'despachado',check:'revisado'};
+    const filters=S.dispFilters||{}; const sort=S.localDispSort||{col:'fecha',dir:'desc'};
+    const sq=(S.localDispSearch||'').toLowerCase().trim();
+    let list=(S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
+    list=sortLocalList(applyLocalFilters(list,filters),sort);
+    exportListCSV(list,!!S.dispExportDetalle,'pedidos_despachados.csv');
+  });
+  document.getElementById('btnExportDispPDF')?.addEventListener('click',()=>{
+    const filter=S.localDispFilter||'revisar'; const statusMap={revisar:'despachado',check:'revisado'};
+    const filters=S.dispFilters||{}; const sort=S.localDispSort||{col:'fecha',dir:'desc'};
+    const sq=(S.localDispSearch||'').toLowerCase().trim();
+    let list=(S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
+    list=sortLocalList(applyLocalFilters(list,filters),sort);
+    exportListPDF(list,!!S.dispExportDetalle,'Pedidos Despachados');
   });
 
-  // Export Despachados — CSV
-  document.getElementById('btnExportDispCSV')?.addEventListener('click', () => {
-    const sort = S.localDispSort || {col:'fecha', dir:'desc'};
-    const filter = S.localDispFilter || 'revisar';
-    const statusMap = {revisar:'despachado', check:'revisado'};
-    const sq = (S.localDispSearch||'').toLowerCase().trim();
-    let list = (S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
-    let filtered = sq ? list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : list;
-    filtered = sortLocalList(filtered, sort);
-    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
-    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', calcOrderTotal(o).toFixed(2), (o.dispatched_at||o.order_date||o.created_at||'').slice(0,10)]);
-    downloadCSV('pedidos_despachados.csv', headers, rows);
-  });
 
-  // Export Despachados — PDF
-  document.getElementById('btnExportDispPDF')?.addEventListener('click', () => {
-    const sort = S.localDispSort || {col:'fecha', dir:'desc'};
-    const filter = S.localDispFilter || 'revisar';
-    const statusMap = {revisar:'despachado', check:'revisado'};
-    const sq = (S.localDispSearch||'').toLowerCase().trim();
-    let list = (S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
-    let filtered = sq ? list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : list;
-    filtered = sortLocalList(filtered, sort);
-    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
-    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', '$ '+calcOrderTotal(o).toLocaleString('es-AR',{minimumFractionDigits:2}), (o.dispatched_at||o.order_date||o.created_at||'').slice(0,10)]);
-    printLocalTable('Pedidos Despachados', headers, rows);
-  });
-
-  // Export Detail — CSV / PDF
-  document.getElementById('btnDetailExportCSV')?.addEventListener('click', () => {
-    if (S.localOrderDraft) exportLocalOrderDetailCSV(S.localOrderDraft);
-  });
-  document.getElementById('btnDetailExportPDF')?.addEventListener('click', () => {
-    const o = S.localOrderDraft;
-    if (!o) return;
-    const headers = ['ARTICULO','Color','R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','Cant','Kilos','Precio','Subtotal'];
-    const rows = (o.local_order_items||[]).map(item=>{
-      const prod=(S.products||[]).find(p=>(p.product_colors||[]).some(c=>c.id===item.product_color_id));
-      const pc=(prod?.product_colors||[]).find(c=>c.id===item.product_color_id);
-      const rolls=(item.local_order_rolls||[]).slice().sort((a,b)=>a.roll_number-b.roll_number);
-      const totalKg=rolls.reduce((s,r)=>s+parseFloat(r.quantity||0),0);
-      const totalRolls=rolls.filter(r=>parseFloat(r.quantity||0)>0).length;
-      const price=parseFloat(item.price||0);
-      const rollKgs=Array.from({length:10},(_,i)=>{const r=rolls.find(x=>x.roll_number===i+1);const kg=r?parseFloat(r.quantity||0):0;return kg>0?kg:'';});
-      return [prod?.name||'',pc?.color||'',...rollKgs,totalRolls,totalKg.toFixed(2),price.toFixed(2),(totalKg*price).toFixed(2)];
-    });
-    printLocalTable((o.order_number||'Pedido')+' — Detalle', headers, rows);
-  });
-
-  // Open local order detail modal (🔍 button)
+    // Open local order detail modal (🔍 button)
 
   document.querySelectorAll('[data-local-detail]').forEach(btn => btn.addEventListener('click', () => {
     const o = S.localOrders.find(x=>x.id===btn.dataset.localDetail);

@@ -2906,12 +2906,25 @@ function isLocal() { return S.profile?.role === 'local'; }
 function vLocal() {
   const myLocal = S.locals.find(l => l.id === S.profile.local_id);
   const tabs = [
-    { id:'pedidos',   icon:'📋', label:'Pedidos' },
-    { id:'historial', icon:'🗂️', label:'Historial' },
+    { id:'calendario', icon:'📅', label:'Calendario' },
+    { id:'stock',      icon:'🧵', label:'Stock' },
+    { id:'clientes',   icon:'👥', label:'Clientes' },
+    { id:'activos',    icon:'📋', label:'Activos' },
+    { id:'despachados',icon:'📦', label:'Despachados' },
   ];
-  const tab = S.tab || 'pedidos';
-  const tabHtml = tabs.map(t => `<button class="tab-btn${tab===t.id?' active':''}" data-tab="${t.id}">${t.icon} ${t.label}</button>`).join('');
-  let content = tab === 'pedidos' ? vLocalPedidos() : vLocalHistorial();
+  // Init state defaults
+  if (S.localTab === undefined) S.localTab = 'calendario';
+  if (S.localCalYear === undefined) S.localCalYear = new Date().getFullYear();
+  if (S.localCalMonth === undefined) S.localCalMonth = new Date().getMonth();
+  if (S.localDispFilter === undefined) S.localDispFilter = 'revisar';
+  const tab = S.localTab;
+  const tabHtml = tabs.map(t => `<button class="tab-btn${tab===t.id?' active':''}" data-local-tab="${t.id}">${t.icon} ${t.label}</button>`).join('');
+  let content = '';
+  if      (tab === 'calendario')  content = vLocalCalendario();
+  else if (tab === 'stock')       content = vStock();
+  else if (tab === 'clientes')    content = vLocalClientes();
+  else if (tab === 'activos')     content = vLocalActivos();
+  else if (tab === 'despachados') content = vLocalDespachados();
   return `
   <div class="top-bar">
     <div class="top-bar-left">
@@ -2925,37 +2938,120 @@ function vLocal() {
   <div class="content">${content}</div>`;
 }
 
-function vLocalPedidos() {
-  const pendientes = S.localOrders.filter(o => o.status === 'pendiente' || o.status === 'despachado');
-  const sq = (S.localSearchQ||'').toLowerCase();
-  const filtered = sq ? pendientes.filter(o =>
-    (o.order_number||'').toLowerCase().includes(sq) ||
-    (o.clients?.name||'').toLowerCase().includes(sq)
-  ) : pendientes;
+// ── CALENDAR TAB ─────────────────────────────────────────────────────────────
+function vLocalCalendario() {
+  const y = S.localCalYear ?? new Date().getFullYear();
+  const m = S.localCalMonth ?? new Date().getMonth();
+  const today = new Date();
+  const first = new Date(y, m, 1).getDay();
+  const days  = new Date(y, m+1, 0).getDate();
+  const prevD = new Date(y, m, 0).getDate();
 
+  // Build date → orders map for pendiente/borrador
+  const byDate = {};
+  (S.localOrders||[]).filter(o => o.status === 'pendiente' || o.status === 'borrador').forEach(o => {
+    const d = (o.order_date || o.created_at || '').slice(0,10);
+    if (!d) return;
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(o);
+  });
+
+  const DAYS_LOCAL = ['Dom','Lun','Mar','Mié','Jue','Vie','Sáb'];
+  let cells = DAYS_LOCAL.map(d => `<div class="cal-day-name">${d}</div>`).join('');
+
+  for (let i = 0; i < first; i++) {
+    cells += `<div class="cal-day other-month"><div class="cal-day-num">${prevD-first+i+1}</div></div>`;
+  }
+  for (let d = 1; d <= days; d++) {
+    const ds = `${y}-${String(m+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const acts = byDate[ds] || [];
+    const isToday = today.getFullYear()===y && today.getMonth()===m && today.getDate()===d;
+    const dots = acts.map(o => {
+      const col = o.status==='borrador' ? '#9ca3af' : '#3b82f6';
+      return `<div class="cal-dot" style="background:${col}"></div>`;
+    }).join('');
+    const cnt = acts.length > 0 ? `<div class="cal-count">${acts.length}</div>` : '';
+    cells += `<div class="cal-day${isToday?' today':''}" style="cursor:pointer" data-local-day="${ds}"><div class="cal-day-num">${d}</div><div class="cal-dots">${dots}</div>${cnt}</div>`;
+  }
+  const total = Math.ceil((first+days)/7)*7;
+  for (let i = first+days+1; i <= total; i++) cells += `<div class="cal-day other-month"><div class="cal-day-num">${i-first-days}</div></div>`;
+
+  const MONTHS_ES = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  return `
+  <div class="card mb-0">
+    <div class="card-body">
+      <div class="cal-header">
+        <button class="btn btn-secondary btn-sm" data-local-cal-prev>◀</button>
+        <div class="cal-month">${MONTHS_ES[m]} ${y}</div>
+        <button class="btn btn-secondary btn-sm" data-local-cal-next>▶</button>
+      </div>
+      <div class="cal-grid">${cells}</div>
+      <div class="text-muted mt-3" style="font-size:12px">Tocá un día para ver pedidos o crear uno nuevo</div>
+    </div>
+  </div>`;
+}
+
+// ── CLIENTES TAB ─────────────────────────────────────────────────────────────
+function vLocalClientes() {
+  const sq = (S.localClientSearch||'').toLowerCase().trim();
+  const list = (S.localClients||[]);
+  const filtered = sq
+    ? list.filter(c => (c.name||'').toLowerCase().includes(sq) || (c.phone||'').toLowerCase().includes(sq) || (c.empresa||'').toLowerCase().includes(sq))
+    : list;
   const rows = filtered.length === 0
-    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📋</div>No hay pedidos activos</div></td></tr>`
+    ? `<tr><td colspan="4"><div class="empty-state"><div class="empty-icon">👥</div>${sq ? `Sin resultados para "${sq}"` : 'Sin clientes registrados'}</div></td></tr>`
+    : filtered.map(c => `<tr>
+        <td><strong>${c.name||'—'}</strong></td>
+        <td>${c.empresa||'—'}</td>
+        <td>${c.phone||'—'}</td>
+        <td>${c.cuit||'—'}</td>
+      </tr>`).join('');
+  return `
+  <div class="card">
+    <div class="card-header">
+      <div class="card-title">Clientes (${filtered.length}${sq?` de ${list.length}`:''})</div>
+    </div>
+    <div style="padding:10px 16px;border-bottom:1px solid var(--gray-200)">
+      <input type="text" id="fLocalClientSearch" placeholder="🔍 Buscar por nombre, empresa o teléfono..." value="${S.localClientSearch||''}" style="max-width:320px">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Nombre</th><th>Empresa</th><th>Teléfono</th><th>CUIT</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  </div>`;
+}
+
+// ── ACTIVOS TAB ───────────────────────────────────────────────────────────────
+function vLocalActivos() {
+  const sq = (S.localActivosSearch||'').toLowerCase().trim();
+  const activos = (S.localOrders||[]).filter(o => o.status === 'borrador' || o.status === 'pendiente');
+  const filtered = sq
+    ? activos.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
+    : activos;
+  const rows = filtered.length === 0
+    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📋</div>${sq ? 'Sin resultados' : 'No hay pedidos activos'}</div></td></tr>`
     : filtered.map(o => {
         const total = (o.local_order_items||[]).reduce((s,i) => {
           const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
           return s + kg*(parseFloat(i.price||0));
         },0);
-        const stColor = o.status==='despachado'?'var(--orange)':'var(--blue)';
-        const stLabel = o.status==='despachado'?'Despachado':'Pendiente';
+        const stColor = o.status==='borrador' ? 'var(--gray-400)' : 'var(--blue)';
+        const stLabel = o.status==='borrador' ? 'Borrador' : 'Pendiente';
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
-          <td><strong>${o.order_number}</strong></td>
+          <td><strong>${o.order_number||'—'}</strong></td>
           <td>${o.clients?.name||'<span style="color:var(--gray-400)">Sin cliente</span>'}</td>
           <td>${pill(o.move_type)}</td>
-          <td><span style="color:${stColor};font-weight:600">${stLabel}</span></td>
+          <td><span style="background:${stColor};color:white;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${stLabel}</span></td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
-          <td style="font-size:11px;color:var(--gray-400)">${(o.created_at||'').slice(0,10)}</td>
+          <td style="font-size:11px;color:var(--gray-400)">${(o.order_date||o.created_at||'').slice(0,10)}</td>
         </tr>`;
       }).join('');
-
   return `
-  <div class="card mb-3">
+  <div class="card">
     <div class="card-header">
-      <input type="text" id="fLocalSearch" placeholder="🔍 Buscar pedido o cliente..." value="${S.localSearchQ||''}" style="max-width:280px">
+      <input type="text" id="fLocalActivosSearch" placeholder="🔍 Buscar pedido o cliente..." value="${S.localActivosSearch||''}" style="max-width:280px">
       <button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>
     </div>
     <div class="table-wrap">
@@ -2967,100 +3063,172 @@ function vLocalPedidos() {
   </div>`;
 }
 
-function vLocalHistorial() {
-  const revisados = S.localOrders.filter(o => o.status === 'revisado');
-  const sq = (S.localHistSearch||'').toLowerCase();
-  const mf = S.localHistFilter||'all';
-  const desde = S.localHistDesde||''; const hasta = S.localHistHasta||'';
-  const filtered = revisados.filter(o => {
-    if (sq && !(o.order_number||'').toLowerCase().includes(sq) && !(o.clients?.name||'').toLowerCase().includes(sq)) return false;
-    if (mf !== 'all' && o.move_type !== mf) return false;
-    const d = (o.dispatched_at||o.created_at||'').slice(0,10);
-    if (desde && d < desde) return false;
-    if (hasta && d > hasta) return false;
-    return true;
-  });
+// ── DESPACHADOS TAB ───────────────────────────────────────────────────────────
+function vLocalDespachados() {
+  const filter = S.localDispFilter || 'revisar';
+  const statusMap = { revisar: 'despachado', check: 'revisado' };
+  const targetStatus = statusMap[filter] || 'despachado';
+  const sq = (S.localDispSearch||'').toLowerCase().trim();
+  const list = (S.localOrders||[]).filter(o => o.status === targetStatus);
+  const filtered = sq
+    ? list.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
+    : list;
   const rows = filtered.length === 0
-    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">🗂️</div>Sin resultados</div></td></tr>`
+    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📦</div>Sin pedidos en esta sección</div></td></tr>`
     : filtered.map(o => {
-        const total = (o.local_order_items||[]).reduce((s,i)=>{
-          const kg=(i.local_order_rolls||[]).reduce((ss,r)=>ss+parseFloat(r.quantity||0),0);
-          return s+kg*parseFloat(i.price||0);
+        const total = (o.local_order_items||[]).reduce((s,i) => {
+          const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
+          return s + kg*(parseFloat(i.price||0));
         },0);
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
-          <td><strong>${o.order_number}</strong></td>
+          <td><strong>${o.order_number||'—'}</strong></td>
           <td>${o.clients?.name||'—'}</td>
           <td>${pill(o.move_type)}</td>
-          <td>${pill(o.payment_status)}</td>
+          <td>${pill(o.status)}</td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
-          <td style="font-size:11px;color:var(--gray-400)">${(o.dispatched_at||'').slice(0,10)}</td>
+          <td style="font-size:11px;color:var(--gray-400)">${(o.dispatched_at||o.created_at||'').slice(0,10)}</td>
         </tr>`;
       }).join('');
   return `
   <div class="card">
-    <div class="card-header"><div class="card-title">Historial (${filtered.length})</div></div>
-    <div style="padding:10px 16px;border-bottom:1px solid var(--gray-200);display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <input type="text" id="fLocalHistSearch" placeholder="🔍 N° o cliente..." value="${sq}" style="max-width:200px">
-      <select id="fLocalHistType">
-        <option value="all"${mf==='all'?' selected':''}>Todos</option>
-        <option value="venta"${mf==='venta'?' selected':''}>Ventas</option>
-        <option value="reserva"${mf==='reserva'?' selected':''}>Reservas</option>
-        <option value="devolucion"${mf==='devolucion'?' selected':''}>Devoluciones</option>
-      </select>
-      <input type="date" id="fLocalHistDesde" value="${desde}" style="font-size:12px">
-      <span style="color:var(--gray-400)">→</span>
-      <input type="date" id="fLocalHistHasta" value="${hasta}" style="font-size:12px">
+    <div class="card-header">
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm ${filter==='revisar'?'btn-primary':'btn-secondary'}" data-local-disp-filter="revisar">⏳ Por revisar</button>
+        <button class="btn btn-sm ${filter==='check'?'btn-primary':'btn-secondary'}" data-local-disp-filter="check">✅ Revisados</button>
+      </div>
+      <input type="text" id="fLocalDispSearch" placeholder="🔍 Buscar..." value="${S.localDispSearch||''}" style="max-width:220px">
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Pago</th><th style="text-align:right">Total</th><th>Fecha</th></tr></thead>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
   </div>`;
 }
 
-// ── MODAL: Nuevo / Editar pedido local ──────────────────────────────────────
+// ── MODAL: Day detail from calendar ──────────────────────────────────────────
+function mLocalDay() {
+  if (S.modal !== 'localDay') return '';
+  const date = S.localSelectedDate || '';
+  const orders = (S.localOrders||[]).filter(o =>
+    (o.order_date||o.created_at||'').slice(0,10) === date &&
+    (o.status === 'pendiente' || o.status === 'borrador')
+  );
+  const orderRows = orders.length === 0
+    ? `<div class="empty-state" style="padding:16px"><div class="empty-icon" style="font-size:24px">📋</div><div style="font-size:13px;color:var(--gray-400)">Sin pedidos para este día</div></div>`
+    : orders.map(o => {
+        const total = (o.local_order_items||[]).reduce((s,i)=>{
+          const kg=(i.local_order_rolls||[]).reduce((ss,r)=>ss+parseFloat(r.quantity||0),0);
+          return s+kg*parseFloat(i.price||0);
+        },0);
+        const stColor = o.status==='borrador'?'#9ca3af':'#3b82f6';
+        return `<div style="padding:10px 12px;border:1px solid var(--gray-200);border-radius:8px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center" data-local-order="${o.id}" data-close-day>
+          <div>
+            <div style="font-weight:600;font-size:13px">${o.order_number||'—'} · ${o.clients?.name||'Sin cliente'}</div>
+            <div style="font-size:11px;color:var(--gray-500)">${o.move_type||'—'}</div>
+          </div>
+          <div style="text-align:right">
+            <span style="background:${stColor};color:white;padding:2px 8px;border-radius:99px;font-size:11px">${o.status}</span>
+            <div style="font-size:12px;color:var(--gray-500);margin-top:2px">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</div>
+          </div>
+        </div>`;
+      }).join('');
+  return `<div class="modal-overlay" id="overlay">
+    <div class="modal" style="max-width:480px">
+      <div class="modal-header">
+        <div class="modal-title">📅 ${date}</div>
+        <button class="btn btn-secondary btn-sm" data-close>✕</button>
+      </div>
+      <div class="modal-body">
+        ${orderRows}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn btn-primary btn-sm" data-local-new-order data-move-type="venta" data-date="${date}">+ Nueva venta</button>
+          <button class="btn btn-secondary btn-sm" data-local-new-order data-move-type="reserva" data-date="${date}">+ Nueva reserva</button>
+          <button class="btn btn-secondary btn-sm" data-local-new-order data-move-type="devolucion" data-date="${date}">+ Nueva devolución</button>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close>Cerrar</button>
+      </div>
+    </div>
+  </div>`;
+}
+
+// ── MODAL: Nuevo / Editar pedido local (6-step wizard) ───────────────────────
 function mLocalOrder() {
   if (S.modal !== 'localOrder') return '';
   const draft = S.localOrderDraft;
   if (!draft) return '';
   const step = S.localOrderStep || 1;
 
-  // ── STEP 1: Cliente + tipo ───────────────────────────────
+  const progressBar = `<div style="display:flex;gap:3px;margin-bottom:16px">
+    ${[1,2,3,4,5,6].map(s => `<div style="flex:1;height:4px;border-radius:2px;background:${s<=step?'var(--blue)':'var(--gray-200)'}"></div>`).join('')}
+  </div>
+  <div style="font-size:11px;color:var(--gray-400);margin-bottom:12px;text-align:center">Paso ${step} de 6</div>`;
+
+  const btnVolver = step > 1 ? `<button class="btn btn-secondary" id="btnLocalOrderBack">← Volver</button>` : '';
+  const btnBorrador = `<button class="btn btn-secondary" id="btnSaveLocalDraft" ${S.loading?'disabled':''}>💾 Guardar borrador</button>`;
+
+  // ── STEP 1: Tipo de movimiento ───────────────────────────────────────────
   if (step === 1) {
+    const date = draft.date || '';
+    return `<div class="modal-overlay" id="overlay">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-header">
+          <div class="modal-title">🛒 ${draft.orderId?'Editar':'Nuevo'} pedido — Paso 1: Tipo</div>
+          <button class="btn btn-secondary btn-sm" data-close>✕</button>
+        </div>
+        <div class="modal-body">
+          ${progressBar}
+          ${date?`<div style="margin-bottom:14px;padding:8px 12px;background:var(--gray-50);border-radius:6px;font-size:13px">📅 <strong>${date}</strong></div>`:''}
+          <div style="font-size:13px;font-weight:600;margin-bottom:10px">¿Qué tipo de movimiento?</div>
+          <div style="display:flex;gap:10px;margin-bottom:20px">
+            ${['venta','reserva','devolucion'].map(t => `<button class="btn ${draft.moveType===t?'btn-primary':'btn-secondary'}" style="flex:1;padding:14px 8px;font-size:14px;display:flex;flex-direction:column;align-items:center;gap:4px" data-move-type="${t}">
+              ${t==='venta'?'🛒':t==='reserva'?'📅':'🔄'}
+              <span style="font-size:12px">${t.charAt(0).toUpperCase()+t.slice(1)}</span>
+            </button>`).join('')}
+          </div>
+          ${S.err?`<div class="alert alert-error">${S.err}</div>`:''}
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" data-close>Cancelar</button>
+          ${btnBorrador}
+          <button class="btn btn-primary" id="btnLocalStep2">Siguiente →</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 2: Cliente ──────────────────────────────────────────────────────
+  if (step === 2) {
     const cq = (draft.clientSearch||'').toLowerCase();
     const clientRows = cq.length >= 1
-      ? S.localClients.filter(c => c.name.toLowerCase().includes(cq)||(c.phone||'').includes(cq))
-          .slice(0,8).map(c => `<div class="client-option" data-pick-client="${c.id}" data-pick-name="${c.name}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100);hover:background:var(--gray-50)">${c.name}${c.phone?` <span style="font-size:11px;color:var(--gray-400)">${c.phone}</span>`:''}</div>`).join('')
+      ? (S.localClients||[]).filter(c => c.name.toLowerCase().includes(cq)||(c.phone||'').includes(cq))
+          .slice(0,8).map(c => `<div class="client-option" data-pick-client="${c.id}" data-pick-name="${c.name}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100)">${c.name}${c.phone?` <span style="font-size:11px;color:var(--gray-400)">${c.phone}</span>`:''}</div>`).join('')
       : '';
     return `<div class="modal-overlay" id="overlay">
       <div class="modal" style="max-width:500px">
         <div class="modal-header">
-          <div class="modal-title">🛒 Nuevo pedido — Paso 1</div>
+          <div class="modal-title">🛒 Paso 2: Cliente</div>
           <button class="btn btn-secondary btn-sm" data-close>✕</button>
         </div>
         <div class="modal-body">
+          ${progressBar}
           <div class="form-group">
-            <label>Tipo de movimiento</label>
-            <div style="display:flex;gap:8px">
-              ${['venta','reserva','devolucion'].map(t=>`<button class="btn btn-sm ${draft.moveType===t?'btn-primary':'btn-secondary'}" data-move-type="${t}">${t.charAt(0).toUpperCase()+t.slice(1)}</button>`).join('')}
-            </div>
-          </div>
-          <div class="form-group">
-            <label>Cliente (opcional)</label>
-            <input type="text" id="fLocalClientSearch" value="${draft.clientSearch||''}" placeholder="Buscar por nombre o teléfono...">
-            ${draft.selectedClient?`<div style="margin-top:6px;padding:6px 10px;background:var(--blue-50,#eff6ff);border-radius:6px;font-size:13px">✓ <strong>${draft.selectedClient.name}</strong> <button class="btn btn-sm btn-secondary" id="btnClearLocalClient" style="padding:1px 6px;font-size:11px">✕</button></div>`:''}
-            ${clientRows?`<div style="border:1px solid var(--gray-200);border-radius:6px;margin-top:4px;max-height:200px;overflow-y:auto">${clientRows}</div>`:''}
+            <label>Buscar cliente existente</label>
+            <input type="text" id="fLocalClientSearch" value="${draft.clientSearch||''}" placeholder="Nombre o teléfono...">
+            ${draft.selectedClient?`<div style="margin-top:6px;padding:6px 10px;background:#eff6ff;border-radius:6px;font-size:13px">✓ <strong>${draft.selectedClient.name}</strong> <button class="btn btn-sm btn-secondary" id="btnClearLocalClient" style="padding:1px 6px;font-size:11px">✕</button></div>`:''}
+            ${clientRows?`<div style="border:1px solid var(--gray-200);border-radius:6px;margin-top:4px;max-height:180px;overflow-y:auto">${clientRows}</div>`:''}
           </div>
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
             <span style="font-size:12px;color:var(--gray-400)">— o —</span>
-            <button class="btn btn-sm btn-secondary" id="btnNewLocalClient">+ Cliente nuevo</button>
+            <button class="btn btn-sm btn-secondary" id="btnNewLocalClient">${draft.showNewClient?'▼ Ocultar formulario':'+ Nuevo cliente'}</button>
           </div>
           ${draft.showNewClient?`
           <div style="padding:12px;background:var(--gray-50);border-radius:8px;margin-bottom:12px">
             <div style="font-size:12px;font-weight:600;margin-bottom:8px">Nuevo cliente</div>
-            <div class="form-group mb-2"><label style="font-size:11px">Nombre *</label><input type="text" id="fNLCName" value="${draft.newClient?.name||''}" placeholder="Nombre completo"></div>
+            <div class="form-group mb-2"><label style="font-size:11px">Nombre <span style="color:var(--red)">(* obligatorio)</span></label><input type="text" id="fNLCName" value="${draft.newClient?.name||''}" placeholder="Nombre completo"></div>
             <div class="form-group mb-2"><label style="font-size:11px">Empresa</label><input type="text" id="fNLCEmpresa" value="${draft.newClient?.empresa||''}" placeholder="Empresa (opcional)"></div>
             <div class="form-row mb-2">
               <div class="form-group mb-0"><label style="font-size:11px">CUIT</label><input type="text" id="fNLCCuit" value="${draft.newClient?.cuit||''}" placeholder="30-..."></div>
@@ -3072,113 +3240,208 @@ function mLocalOrder() {
           ${S.err?`<div class="alert alert-error">${S.err}</div>`:''}
         </div>
         <div class="modal-footer">
+          ${btnVolver}
           <button class="btn btn-secondary" data-close>Cancelar</button>
-          <button class="btn btn-primary" id="btnLocalOrderStep2">Siguiente → Artículos</button>
+          ${btnBorrador}
+          <button class="btn btn-primary" id="btnLocalStep3">Siguiente →</button>
         </div>
       </div>
     </div>`;
   }
 
-  // ── STEP 2: Artículos ────────────────────────────────────
-  const pq = (draft.productSearch||'').toLowerCase();
-  const allColors = S.products.flatMap(p => (p.product_colors||[]).map(pc=>({
-    id: pc.id, name: p.name, color: pc.color, unit: p.unit||'kg',
-    stock: pc.total_stock||0,
-  })));
-  const matchColors = pq.length >= 1
-    ? allColors.filter(pc => pc.name.toLowerCase().includes(pq)||pc.color.toLowerCase().includes(pq)).slice(0,8)
-    : [];
-
-  const itemsHtml = (draft.items||[]).map((item,idx) => {
-    const pc = allColors.find(x=>x.id===item.productColorId)||{};
-    const totalKg = (item.rolls||[]).reduce((s,v)=>s+parseFloat(v||0),0);
-    const subtotal = totalKg * parseFloat(item.price||0);
-    return `<div style="padding:10px;border:1px solid var(--gray-200);border-radius:8px;margin-bottom:8px">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <div style="font-weight:600;font-size:13px">${pc.name||'?'} · <span style="color:var(--gray-500)">${pc.color||'?'}</span></div>
-        <button class="btn btn-sm btn-danger" data-rm-local-item="${idx}" style="padding:2px 8px">🗑️</button>
-      </div>
-      <div class="form-row mb-2">
-        <div class="form-group mb-0"><label style="font-size:11px">Precio</label>
-          <input type="number" min="0" step="0.01" id="fLIPrice_${idx}" value="${item.price||''}" placeholder="0.00" style="font-size:13px"></div>
-        <div class="form-group mb-0"><label style="font-size:11px">Moneda</label>
-          <select id="fLICur_${idx}" style="font-size:13px">
-            <option value="ARS"${item.priceCurrency==='ARS'?' selected':''}>ARS $</option>
-            <option value="USD"${item.priceCurrency==='USD'?' selected':''}>USD</option>
-          </select></div>
-      </div>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-        <span style="font-size:12px;color:var(--gray-500)">${item.rolls.length} rollo${item.rolls.length!==1?'s':''} · ${totalKg.toFixed(3)} kg</span>
-        <div style="display:flex;gap:4px">
-          <button class="btn btn-sm btn-secondary" data-rm-local-roll="${idx}" style="padding:2px 8px;font-size:14px" ${item.rolls.length<=1?'disabled':''}>−</button>
-          <button class="btn btn-sm btn-primary"   data-add-local-roll="${idx}" style="padding:2px 8px;font-size:14px">+</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:6px">
-        ${item.rolls.map((v,i)=>`<div class="form-group mb-0">
-          <label style="font-size:10px">Rollo ${i+1} (kg)</label>
-          <input type="number" min="0" step="0.001" id="fLRoll_${idx}_${i}" value="${v||''}" placeholder="0.000" style="font-size:12px">
-        </div>`).join('')}
-      </div>
-      ${subtotal>0?`<div style="text-align:right;font-size:12px;color:var(--blue);margin-top:4px">Subtotal: $ ${subtotal.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>`:''}
-    </div>`;
-  }).join('');
-
-  const grandTotal = (draft.items||[]).reduce((s,item) => {
-    const kg=(item.rolls||[]).reduce((ss,v)=>ss+parseFloat(v||0),0);
-    return s+kg*parseFloat(item.price||0);
-  },0);
-
-  return `<div class="modal-overlay" id="overlay">
-    <div class="modal" style="max-width:620px">
-      <div class="modal-header">
+  // ── STEP 3: Artículos ────────────────────────────────────────────────────
+  if (step === 3) {
+    const pq = (draft.productSearch||'').toLowerCase();
+    const allColors = (S.products||[]).flatMap(p => (p.product_colors||[]).map(pc=>({
+      id: pc.id, name: p.name, color: pc.color, unit: p.unit||'kg',
+      stock: (pc.total_stock||0) - (pc.reserved_stock||0),
+    })));
+    const matchColors = pq.length >= 1
+      ? allColors.filter(pc => pc.name.toLowerCase().includes(pq)||pc.color.toLowerCase().includes(pq)).slice(0,8)
+      : [];
+    const itemsHtml = (draft.items||[]).map((item,idx) => {
+      const pc = allColors.find(x=>x.id===item.productColorId)||{};
+      const rollCount = (item.rolls||[]).length;
+      return `<div style="padding:10px;border:1px solid var(--gray-200);border-radius:8px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center">
         <div>
-          <div class="modal-title">🛒 ${draft.orderId?'Editar':'Nuevo'} pedido — ${draft.moveType||'venta'}</div>
-          <div style="font-size:12px;color:var(--gray-400)">${draft.selectedClient?.name||'Sin cliente'}</div>
+          <div style="font-weight:600;font-size:13px">${pc.name||'?'} · <span style="color:var(--gray-500)">${pc.color||'?'}</span></div>
+          <div style="font-size:11px;color:var(--gray-400)">Stock: ${pc.stock??'—'} · ${rollCount} rollo${rollCount!==1?'s':''}</div>
         </div>
-        <button class="btn btn-secondary btn-sm" data-close>✕</button>
+        <div style="display:flex;gap:6px;align-items:center">
+          <button class="btn btn-sm btn-secondary" data-rm-local-roll="${idx}" style="padding:2px 8px" ${rollCount<=1?'disabled':''}>−</button>
+          <span style="font-size:13px;font-weight:600;min-width:20px;text-align:center">${rollCount}</span>
+          <button class="btn btn-sm btn-primary" data-add-local-roll="${idx}" style="padding:2px 8px">+</button>
+          <button class="btn btn-sm btn-danger" data-rm-local-item="${idx}" style="padding:2px 8px">🗑️</button>
+        </div>
+      </div>`;
+    }).join('');
+    return `<div class="modal-overlay" id="overlay">
+      <div class="modal" style="max-width:580px">
+        <div class="modal-header">
+          <div class="modal-title">🛒 Paso 3: Artículos</div>
+          <button class="btn btn-secondary btn-sm" data-close>✕</button>
+        </div>
+        <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+          ${progressBar}
+          <div class="form-group">
+            <input type="text" id="fLocalProductSearch" value="${draft.productSearch||''}" placeholder="🔍 Buscar artículo o color...">
+            ${matchColors.length>0?`<div style="border:1px solid var(--gray-200);border-radius:6px;margin-top:4px;max-height:160px;overflow-y:auto">
+              ${matchColors.map(pc=>`<div class="client-option" data-add-local-item="${pc.id}" data-item-name="${pc.name}" data-item-color="${pc.color}" data-item-unit="${pc.unit}" style="padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between">
+                <span>${pc.name} · <span style="color:var(--gray-500)">${pc.color}</span></span>
+                <span style="font-size:11px;color:var(--gray-400)">${pc.stock} disp.</span>
+              </div>`).join('')}
+            </div>`:''}
+          </div>
+          ${itemsHtml||`<div class="empty-state" style="padding:20px"><div class="empty-icon">🧵</div>Buscá y agregá artículos</div>`}
+          ${S.err?`<div class="alert alert-error">${S.err}</div>`:''}
+        </div>
+        <div class="modal-footer">
+          ${btnVolver}
+          <button class="btn btn-secondary" data-close>Cancelar</button>
+          ${btnBorrador}
+          <button class="btn btn-primary" id="btnLocalStep4">Siguiente →</button>
+        </div>
       </div>
-      <div class="modal-body" style="max-height:65vh;overflow-y:auto">
-        <div class="form-group">
-          <input type="text" id="fLocalProductSearch" value="${draft.productSearch||''}" placeholder="🔍 Buscar artículo o color para agregar...">
-          ${matchColors.length>0?`<div style="border:1px solid var(--gray-200);border-radius:6px;margin-top:4px;max-height:160px;overflow-y:auto">
-            ${matchColors.map(pc=>`<div class="client-option" data-add-local-item="${pc.id}" data-item-name="${pc.name}" data-item-color="${pc.color}" data-item-unit="${pc.unit}" style="padding:7px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100);display:flex;justify-content:space-between">
-              <span>${pc.name} · <span style="color:var(--gray-500)">${pc.color}</span></span>
-              <span style="font-size:11px;color:var(--gray-400)">${pc.stock} en stock</span>
-            </div>`).join('')}
-          </div>`:''}
+    </div>`;
+  }
+
+  // ── STEP 4: Precios ──────────────────────────────────────────────────────
+  if (step === 4) {
+    const allColors = (S.products||[]).flatMap(p => (p.product_colors||[]).map(pc=>({id:pc.id,name:p.name,color:pc.color})));
+    const priceHtml = (draft.items||[]).length === 0
+      ? `<div class="empty-state" style="padding:20px"><div class="empty-icon">🧵</div>No hay artículos. Volvé al paso 3.</div>`
+      : (draft.items||[]).map((item,idx) => {
+          const pc = allColors.find(x=>x.id===item.productColorId)||{};
+          return `<div style="padding:10px;border:1px solid var(--gray-200);border-radius:8px;margin-bottom:8px">
+            <div style="font-weight:600;font-size:13px;margin-bottom:8px">${pc.name||'?'} · <span style="color:var(--gray-500)">${pc.color||'?'}</span></div>
+            <div style="font-size:11px;color:var(--gray-400);margin-bottom:8px">Todos los rollos del mismo artículo tienen el mismo precio</div>
+            <div class="form-row mb-0">
+              <div class="form-group mb-0"><label style="font-size:11px">Precio por kg</label>
+                <input type="number" min="0" step="0.01" id="fLIPrice_${idx}" value="${item.price||''}" placeholder="0.00"></div>
+              <div class="form-group mb-0"><label style="font-size:11px">Moneda</label>
+                <select id="fLICur_${idx}">
+                  <option value="ARS"${(item.priceCurrency||'ARS')==='ARS'?' selected':''}>ARS $</option>
+                  <option value="USD"${item.priceCurrency==='USD'?' selected':''}>USD</option>
+                </select></div>
+            </div>
+          </div>`;
+        }).join('');
+    return `<div class="modal-overlay" id="overlay">
+      <div class="modal" style="max-width:520px">
+        <div class="modal-header">
+          <div class="modal-title">🛒 Paso 4: Precios</div>
+          <button class="btn btn-secondary btn-sm" data-close>✕</button>
         </div>
-        ${itemsHtml||`<div class="empty-state" style="padding:20px"><div class="empty-icon">🧵</div>Buscá y agregá artículos</div>`}
-        ${grandTotal>0?`<div style="text-align:right;font-weight:700;font-size:15px;color:var(--blue);padding:8px 0">TOTAL: $ ${grandTotal.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>`:''}
-        <div class="form-row mt-2">
-          <div class="form-group mb-0"><label>Pago</label>
-            <select id="fLPayStatus">
-              <option value="pendiente"${(draft.paymentStatus||'pendiente')==='pendiente'?' selected':''}>Pendiente</option>
-              <option value="pagado"${draft.paymentStatus==='pagado'?' selected':''}>Pagado</option>
-            </select></div>
-          <div class="form-group mb-0"><label>Monto pagado</label>
-            <input type="number" id="fLPayAmount" value="${draft.paymentAmount||''}" placeholder="0.00" min="0" step="0.01"></div>
-          <div class="form-group mb-0"><label>Forma de pago</label>
+        <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+          ${progressBar}
+          ${priceHtml}
+          ${S.err?`<div class="alert alert-error">${S.err}</div>`:''}
+        </div>
+        <div class="modal-footer">
+          ${btnVolver}
+          <button class="btn btn-secondary" data-close>Cancelar</button>
+          ${btnBorrador}
+          <button class="btn btn-primary" id="btnLocalStep5">Siguiente →</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 5: Forma de pago ────────────────────────────────────────────────
+  if (step === 5) {
+    return `<div class="modal-overlay" id="overlay">
+      <div class="modal" style="max-width:480px">
+        <div class="modal-header">
+          <div class="modal-title">🛒 Paso 5: Forma de pago</div>
+          <button class="btn btn-secondary btn-sm" data-close>✕</button>
+        </div>
+        <div class="modal-body">
+          ${progressBar}
+          <div class="form-row mb-3">
+            <div class="form-group mb-0"><label>Estado del pago</label>
+              <select id="fLPayStatus">
+                <option value="pendiente"${(draft.paymentStatus||'pendiente')==='pendiente'?' selected':''}>Pendiente</option>
+                <option value="pagado"${draft.paymentStatus==='pagado'?' selected':''}>Pagado</option>
+              </select></div>
+            <div class="form-group mb-0"><label>Monto pagado</label>
+              <input type="number" id="fLPayAmount" value="${draft.paymentAmount||''}" placeholder="0.00" min="0" step="0.01"></div>
+          </div>
+          <div class="form-group"><label>Forma de pago</label>
             <select id="fLPayType">
               <option value="">—</option>
               <option value="efectivo_ars"${draft.paymentType==='efectivo_ars'?' selected':''}>Efectivo $</option>
               <option value="efectivo_usd"${draft.paymentType==='efectivo_usd'?' selected':''}>Efectivo USD</option>
               <option value="transferencia"${draft.paymentType==='transferencia'?' selected':''}>Transferencia</option>
               <option value="cheque"${draft.paymentType==='cheque'?' selected':''}>Cheque</option>
+              <option value="cuenta_corriente"${draft.paymentType==='cuenta_corriente'?' selected':''}>Cuenta Corriente</option>
             </select></div>
+          <div class="form-group"><label>Notas</label>
+            <textarea id="fLNotes" rows="3" placeholder="Observaciones...">${draft.notes||''}</textarea></div>
+          ${S.err?`<div class="alert alert-error">${S.err}</div>`:''}
         </div>
-        <div class="form-group mt-2"><label>Notas</label>
-          <textarea id="fLNotes" rows="2" placeholder="Observaciones...">${draft.notes||''}</textarea></div>
+        <div class="modal-footer">
+          ${btnVolver}
+          <button class="btn btn-secondary" data-close>Cancelar</button>
+          ${btnBorrador}
+          <button class="btn btn-primary" id="btnLocalStep6">Siguiente →</button>
+        </div>
+      </div>
+    </div>`;
+  }
+
+  // ── STEP 6: Rollos ───────────────────────────────────────────────────────
+  const allColors6 = (S.products||[]).flatMap(p => (p.product_colors||[]).map(pc=>({id:pc.id,name:p.name,color:pc.color})));
+  const grandTotal = (draft.items||[]).reduce((s,item) => {
+    const kg=(item.rolls||[]).reduce((ss,v)=>ss+parseFloat(v||0),0);
+    return s+kg*parseFloat(item.price||0);
+  },0);
+  const rollsHtml = (draft.items||[]).length === 0
+    ? `<div class="empty-state" style="padding:16px"><div class="empty-icon">🧵</div>No hay artículos</div>`
+    : (draft.items||[]).map((item,idx) => {
+        const pc = allColors6.find(x=>x.id===item.productColorId)||{};
+        const totalKg = (item.rolls||[]).reduce((s,v)=>s+parseFloat(v||0),0);
+        const subtotal = totalKg * parseFloat(item.price||0);
+        return `<div style="padding:10px;border:1px solid var(--gray-200);border-radius:8px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div style="font-weight:600;font-size:13px">${pc.name||'?'} · <span style="color:var(--gray-500)">${pc.color||'?'}</span></div>
+            <div style="display:flex;gap:4px">
+              <button class="btn btn-sm btn-secondary" data-rm-local-roll="${idx}" style="padding:2px 8px" ${item.rolls.length<=1?'disabled':''}>−</button>
+              <span style="font-size:12px;padding:2px 6px">${item.rolls.length} rollos</span>
+              <button class="btn btn-sm btn-primary" data-add-local-roll="${idx}" style="padding:2px 8px">+</button>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:6px">
+            ${item.rolls.map((v,i)=>`<div class="form-group mb-0">
+              <label style="font-size:10px">Rollo ${i+1} (kg)</label>
+              <input type="number" min="0" step="0.001" id="fLRoll_${idx}_${i}" value="${v||''}" placeholder="0.000" style="font-size:12px">
+            </div>`).join('')}
+          </div>
+          ${subtotal>0?`<div style="text-align:right;font-size:12px;color:var(--blue);margin-top:4px">Subtotal: $ ${subtotal.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>`:''}
+        </div>`;
+      }).join('');
+  return `<div class="modal-overlay" id="overlay">
+    <div class="modal" style="max-width:620px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">🛒 Paso 6: Kg por rollo</div>
+          <div style="font-size:12px;color:var(--gray-400)">${draft.selectedClient?.name||'Sin cliente'} · ${draft.moveType||'venta'}</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" data-close>✕</button>
+      </div>
+      <div class="modal-body" style="max-height:65vh;overflow-y:auto">
+        ${progressBar}
+        ${rollsHtml}
+        ${grandTotal>0?`<div style="text-align:right;font-weight:700;font-size:15px;color:var(--blue);padding:8px 0;border-top:2px solid var(--gray-200)">TOTAL: $ ${grandTotal.toLocaleString('es-AR',{minimumFractionDigits:2})}</div>`:''}
         ${S.err?`<div class="alert alert-error mt-2">${S.err}</div>`:''}
       </div>
       <div class="modal-footer">
-        <button class="btn btn-secondary" id="btnLocalOrderBack">← Volver</button>
+        ${btnVolver}
         <button class="btn btn-secondary" data-close>Cancelar</button>
-        <button class="btn btn-primary" id="btnSaveLocalOrder" ${S.loading?'disabled':''}>
-          ${S.loading?'<div class="spinner"></div>':'💾 Guardar'}
+        ${btnBorrador}
+        <button class="btn btn-primary" id="btnConfirmLocalOrder" ${S.loading?'disabled':''}>
+          ${S.loading?'<div class="spinner"></div>':'✅ Confirmar pedido'}
         </button>
-        ${draft.orderId&&draft.status!=='despachado'?`
-        <button class="btn btn-success" id="btnDispatchLocalOrder" ${S.loading?'disabled':''}>🚀 Despachar</button>`:''}
+        ${draft.orderId&&draft.status==='pendiente'?`<button class="btn btn-success" id="btnDispatchLocalOrder" ${S.loading?'disabled':''}>🚀 Despachar</button>`:''}
       </div>
     </div>
   </div>`;
@@ -3290,6 +3553,7 @@ async function draw() {
       localOrder:       mLocalOrder(),
       localDispatch:    mLocalDispatch(),
       adminLocalReview: mAdminLocalReview(),
+      localDay:         mLocalDay(),
     }[modal] || '';
     if (localModal) app.insertAdjacentHTML('beforeend', localModal);
     bindAll();
@@ -4251,19 +4515,53 @@ function bindAll() {
   });
   // ── LOCAL MODULE HANDLERS ──────────────────────────────────────────────────
 
-  // New order button
-  document.getElementById('btnNewLocalOrder')?.addEventListener('click', () => {
-    S.localOrderDraft = { moveType:'venta', clientSearch:'', selectedClient:null, showNewClient:false, newClient:{}, items:[], productSearch:'', paymentStatus:'pendiente', paymentAmount:'', paymentType:'', notes:'' };
-    S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
-  });
-
-  // Move type buttons
-  document.querySelectorAll('[data-move-type]').forEach(b => b.addEventListener('click', () => {
-    if (!S.localOrderDraft) return;
-    S.localOrderDraft.moveType = b.dataset.moveType; draw();
+  // Local tab switch
+  document.querySelectorAll('[data-local-tab]').forEach(b => b.addEventListener('click', async () => {
+    S.localTab = b.dataset.localTab;
+    draw();
   }));
 
-  // Client search in local order step 1
+  // Calendar prev/next
+  document.querySelector('[data-local-cal-prev]')?.addEventListener('click', () => {
+    if (S.localCalMonth === undefined) S.localCalMonth = new Date().getMonth();
+    if (S.localCalYear === undefined) S.localCalYear = new Date().getFullYear();
+    S.localCalMonth--;
+    if (S.localCalMonth < 0) { S.localCalMonth = 11; S.localCalYear--; }
+    draw();
+  });
+  document.querySelector('[data-local-cal-next]')?.addEventListener('click', () => {
+    if (S.localCalMonth === undefined) S.localCalMonth = new Date().getMonth();
+    if (S.localCalYear === undefined) S.localCalYear = new Date().getFullYear();
+    S.localCalMonth++;
+    if (S.localCalMonth > 11) { S.localCalMonth = 0; S.localCalYear++; }
+    draw();
+  });
+
+  // Click a calendar day
+  document.querySelectorAll('[data-local-day]').forEach(cell => cell.addEventListener('click', () => {
+    S.localSelectedDate = cell.dataset.localDay;
+    S.modal = 'localDay'; draw();
+  }));
+
+  // New order from day modal or activos tab
+  document.getElementById('btnNewLocalOrder')?.addEventListener('click', () => {
+    const today = new Date().toISOString().slice(0,10);
+    S.localOrderDraft = { moveType:'venta', date: today, clientSearch:'', selectedClient:null, showNewClient:false, newClient:{}, items:[], productSearch:'', paymentStatus:'pendiente', paymentAmount:'', paymentType:'', notes:'' };
+    S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
+  });
+  document.querySelectorAll('[data-local-new-order]').forEach(b => b.addEventListener('click', () => {
+    const moveType = b.dataset.moveType || 'venta';
+    const date = b.dataset.date || new Date().toISOString().slice(0,10);
+    S.localOrderDraft = { moveType, date, clientSearch:'', selectedClient:null, showNewClient:false, newClient:{}, items:[], productSearch:'', paymentStatus:'pendiente', paymentAmount:'', paymentType:'', notes:'' };
+    S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
+  }));
+
+  // Despachados filter tabs
+  document.querySelectorAll('[data-local-disp-filter]').forEach(b => b.addEventListener('click', () => {
+    S.localDispFilter = b.dataset.localDispFilter; draw();
+  }));
+
+  // Search inputs
   document.getElementById('fLocalClientSearch')?.addEventListener('input', e => {
     if (!S.localOrderDraft) return;
     S.localOrderDraft.clientSearch = e.target.value;
@@ -4272,6 +4570,31 @@ function bindAll() {
     const el = document.getElementById('fLocalClientSearch');
     if (el) { el.focus(); el.setSelectionRange(pos,pos); }
   });
+  document.getElementById('fLocalActivosSearch')?.addEventListener('input', e => {
+    S.localActivosSearch = e.target.value; const pos=e.target.selectionStart; draw();
+    const el=document.getElementById('fLocalActivosSearch'); if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.getElementById('fLocalDispSearch')?.addEventListener('input', e => {
+    S.localDispSearch = e.target.value; const pos=e.target.selectionStart; draw();
+    const el=document.getElementById('fLocalDispSearch'); if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.getElementById('fLocalClientSearch_tab')?.addEventListener('input', e => {
+    S.localClientSearch = e.target.value; const pos=e.target.selectionStart; draw();
+    const el=document.getElementById('fLocalClientSearch_tab'); if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  // Client search in clientes tab (id without _tab suffix)
+  const fLCsearch = document.getElementById('fLocalClientSearch');
+  if (fLCsearch && S.localTab === 'clientes') {
+    fLCsearch.addEventListener('input', e => {
+      S.localClientSearch = e.target.value; draw();
+    });
+  }
+
+  // Move type buttons (in wizard step 1)
+  document.querySelectorAll('[data-move-type]').forEach(b => b.addEventListener('click', () => {
+    if (!S.localOrderDraft) return;
+    S.localOrderDraft.moveType = b.dataset.moveType; draw();
+  }));
 
   // Pick existing client
   document.querySelectorAll('[data-pick-client]').forEach(b => b.addEventListener('click', () => {
@@ -4281,21 +4604,83 @@ function bindAll() {
     S.localOrderDraft.clientSearch = client?.name||'';
     draw();
   }));
-
   document.getElementById('btnClearLocalClient')?.addEventListener('click', () => {
     if (!S.localOrderDraft) return;
     S.localOrderDraft.selectedClient = null; S.localOrderDraft.clientSearch = ''; draw();
   });
-
   document.getElementById('btnNewLocalClient')?.addEventListener('click', () => {
     if (!S.localOrderDraft) return;
     S.localOrderDraft.showNewClient = !S.localOrderDraft.showNewClient; draw();
   });
 
-  // Step 1 → Step 2
-  document.getElementById('btnLocalOrderStep2')?.addEventListener('click', async () => {
+  // Product search in step 3
+  document.getElementById('fLocalProductSearch')?.addEventListener('input', e => {
     if (!S.localOrderDraft) return;
-    // Save new client if filling form
+    S.localOrderDraft.productSearch = e.target.value;
+    const pos = e.target.selectionStart; draw();
+    const el = document.getElementById('fLocalProductSearch');
+    if (el) { el.focus(); el.setSelectionRange(pos,pos); }
+  });
+
+  // Add article to order
+  document.querySelectorAll('[data-add-local-item]').forEach(b => b.addEventListener('click', () => {
+    if (!S.localOrderDraft) return;
+    const pcId = b.dataset.addLocalItem;
+    if (S.localOrderDraft.items.find(i=>i.productColorId===pcId)) return;
+    const suggested = (S.localPriceLists||[]).find(p=>p.product_color_id===pcId&&(!p.local_id||p.local_id===S.profile.local_id));
+    S.localOrderDraft.items.push({ productColorId:pcId, price: suggested?.price||'', priceCurrency: suggested?.currency||'ARS', rolls:[''] });
+    S.localOrderDraft.productSearch = ''; draw();
+  }));
+
+  // Remove article
+  document.querySelectorAll('[data-rm-local-item]').forEach(b => b.addEventListener('click', () => {
+    if (!S.localOrderDraft) return;
+    const idx = parseInt(b.dataset.rmLocalItem);
+    S.localOrderDraft.items.splice(idx,1); draw();
+  }));
+
+  // Sync rolls/prices from DOM before navigating
+  function syncLocalRolls() {
+    if (!S.localOrderDraft) return;
+    S.localOrderDraft.items.forEach((item,idx) => {
+      const priceEl = document.getElementById(`fLIPrice_${idx}`);
+      const curEl   = document.getElementById(`fLICur_${idx}`);
+      if (priceEl) item.price = priceEl.value;
+      if (curEl)   item.priceCurrency = curEl.value;
+      item.rolls = item.rolls.map((_,i) => {
+        const el = document.getElementById(`fLRoll_${idx}_${i}`);
+        return el ? el.value : _;
+      });
+    });
+    const ps = document.getElementById('fLPayStatus');
+    const pa = document.getElementById('fLPayAmount');
+    const pt = document.getElementById('fLPayType');
+    const pn = document.getElementById('fLNotes');
+    if (ps) S.localOrderDraft.paymentStatus = ps.value;
+    if (pa) S.localOrderDraft.paymentAmount = pa.value;
+    if (pt) S.localOrderDraft.paymentType   = pt.value;
+    if (pn) S.localOrderDraft.notes         = pn.value;
+  }
+
+  // Add/remove rolls
+  document.querySelectorAll('[data-add-local-roll]').forEach(b => b.addEventListener('click', () => {
+    syncLocalRolls(); const idx=parseInt(b.dataset.addLocalRoll);
+    if (S.localOrderDraft?.items[idx]) { S.localOrderDraft.items[idx].rolls.push(''); draw(); }
+  }));
+  document.querySelectorAll('[data-rm-local-roll]').forEach(b => b.addEventListener('click', () => {
+    syncLocalRolls(); const idx=parseInt(b.dataset.rmLocalRoll);
+    if (S.localOrderDraft?.items[idx]?.rolls.length>1) { S.localOrderDraft.items[idx].rolls.pop(); draw(); }
+  }));
+
+  // ── STEP NAVIGATION ──
+  document.getElementById('btnLocalStep2')?.addEventListener('click', () => {
+    if (!S.localOrderDraft) return;
+    if (!S.localOrderDraft.moveType) { S.err='Elegí un tipo de movimiento'; draw(); return; }
+    S.localOrderStep = 2; S.err = null; draw();
+  });
+
+  document.getElementById('btnLocalStep3')?.addEventListener('click', async () => {
+    if (!S.localOrderDraft) return;
     if (S.localOrderDraft.showNewClient) {
       const name = document.getElementById('fNLCName')?.value?.trim();
       if (!name) { S.err = 'El nombre del cliente es obligatorio'; draw(); return; }
@@ -4318,79 +4703,56 @@ function bindAll() {
     } else {
       S.localOrderDraft.clientId = S.localOrderDraft.selectedClient?.id || null;
     }
-    S.localOrderStep = 2; S.err = null; draw();
+    S.localOrderStep = 3; S.err = null; draw();
+  });
+
+  document.getElementById('btnLocalStep4')?.addEventListener('click', () => {
+    S.localOrderStep = 4; S.err = null; draw();
+  });
+
+  document.getElementById('btnLocalStep5')?.addEventListener('click', () => {
+    syncLocalRolls();
+    S.localOrderStep = 5; S.err = null; draw();
+  });
+
+  document.getElementById('btnLocalStep6')?.addEventListener('click', () => {
+    const ps = document.getElementById('fLPayStatus');
+    const pa = document.getElementById('fLPayAmount');
+    const pt = document.getElementById('fLPayType');
+    const pn = document.getElementById('fLNotes');
+    if (ps) S.localOrderDraft.paymentStatus = ps.value;
+    if (pa) S.localOrderDraft.paymentAmount = pa.value;
+    if (pt) S.localOrderDraft.paymentType   = pt.value;
+    if (pn) S.localOrderDraft.notes         = pn.value;
+    S.localOrderStep = 6; S.err = null; draw();
   });
 
   document.getElementById('btnLocalOrderBack')?.addEventListener('click', () => {
-    S.localOrderStep = 1; draw();
+    syncLocalRolls();
+    if (S.localOrderStep > 1) { S.localOrderStep--; S.err = null; draw(); }
   });
 
-  // Product search in step 2
-  document.getElementById('fLocalProductSearch')?.addEventListener('input', e => {
-    if (!S.localOrderDraft) return;
-    S.localOrderDraft.productSearch = e.target.value;
-    const pos = e.target.selectionStart; draw();
-    const el = document.getElementById('fLocalProductSearch');
-    if (el) { el.focus(); el.setSelectionRange(pos,pos); }
-  });
-
-  // Add article to order
-  document.querySelectorAll('[data-add-local-item]').forEach(b => b.addEventListener('click', () => {
-    if (!S.localOrderDraft) return;
-    const pcId = b.dataset.addLocalItem;
-    if (S.localOrderDraft.items.find(i=>i.productColorId===pcId)) return; // already added
-    const suggested = S.localPriceLists.find(p=>p.product_color_id===pcId&&(!p.local_id||p.local_id===S.profile.local_id));
-    S.localOrderDraft.items.push({ productColorId:pcId, price: suggested?.price||'', priceCurrency: suggested?.currency||'ARS', rolls:[''] });
-    S.localOrderDraft.productSearch = ''; draw();
-  }));
-
-  // Remove article
-  document.querySelectorAll('[data-rm-local-item]').forEach(b => b.addEventListener('click', () => {
-    if (!S.localOrderDraft) return;
-    const idx = parseInt(b.dataset.rmLocalItem);
-    S.localOrderDraft.items.splice(idx,1); draw();
-  }));
-
-  // Add/remove rolls per article
-  function syncLocalRolls() {
-    if (!S.localOrderDraft) return;
-    S.localOrderDraft.items.forEach((item,idx) => {
-      item.price = document.getElementById(`fLIPrice_${idx}`)?.value || item.price;
-      item.priceCurrency = document.getElementById(`fLICur_${idx}`)?.value || item.priceCurrency;
-      item.rolls = item.rolls.map((_,i) => document.getElementById(`fLRoll_${idx}_${i}`)?.value||_);
-    });
-    S.localOrderDraft.paymentStatus = document.getElementById('fLPayStatus')?.value || S.localOrderDraft.paymentStatus;
-    S.localOrderDraft.paymentAmount = document.getElementById('fLPayAmount')?.value || S.localOrderDraft.paymentAmount;
-    S.localOrderDraft.paymentType   = document.getElementById('fLPayType')?.value   || S.localOrderDraft.paymentType;
-    S.localOrderDraft.notes         = document.getElementById('fLNotes')?.value     || S.localOrderDraft.notes;
-  }
-  document.querySelectorAll('[data-add-local-roll]').forEach(b => b.addEventListener('click', () => {
-    syncLocalRolls(); const idx=parseInt(b.dataset.addLocalRoll);
-    S.localOrderDraft.items[idx].rolls.push(''); draw();
-  }));
-  document.querySelectorAll('[data-rm-local-roll]').forEach(b => b.addEventListener('click', () => {
-    syncLocalRolls(); const idx=parseInt(b.dataset.rmLocalRoll);
-    if(S.localOrderDraft.items[idx].rolls.length>1) S.localOrderDraft.items[idx].rolls.pop(); draw();
-  }));
-
-  // Save local order
-  document.getElementById('btnSaveLocalOrder')?.addEventListener('click', async () => {
+  // ── SAVE BORRADOR ──
+  async function saveLocalDraft(status) {
     syncLocalRolls();
     const d = S.localOrderDraft;
     if (!d) return;
-    if ((d.items||[]).length===0) { S.err='Agregá al menos un artículo'; draw(); return; }
+    if (status === 'pendiente' && (d.items||[]).length === 0) { S.err='Agregá al menos un artículo'; draw(); return; }
     S.loading = true; S.err = null; draw();
     if (d.orderId) {
-      await dbUpdateLocalOrder(d.orderId, { move_type:d.moveType, notes:d.notes, payment_status:d.paymentStatus, payment_amount:d.paymentAmount||null, payment_type:d.paymentType||null });
+      await dbUpdateLocalOrder(d.orderId, { move_type:d.moveType, notes:d.notes, payment_status:d.paymentStatus, payment_amount:d.paymentAmount||null, payment_type:d.paymentType||null, status, order_date:d.date||null });
       await dbSaveLocalOrderItems(d.orderId, d.items);
     } else {
-      const err = await dbCreateLocalOrder({ ...d, localId: S.profile.local_id });
+      const err = await dbCreateLocalOrder({ ...d, status, localId: S.profile.local_id });
       if (err) { S.loading=false; S.err=err; draw(); return; }
     }
     S.loading = false;
     await dbLocalOrders(isAdmin()?null:S.profile.local_id);
     closeModal();
-  });
+  }
+
+  document.getElementById('btnSaveLocalDraft')?.addEventListener('click', () => saveLocalDraft('borrador'));
+  document.getElementById('btnConfirmLocalOrder')?.addEventListener('click', () => saveLocalDraft('pendiente'));
 
   // Dispatch button in order modal
   document.getElementById('btnDispatchLocalOrder')?.addEventListener('click', () => {
@@ -4410,25 +4772,25 @@ function bindAll() {
   document.getElementById('btnDispatchEntregado')?.addEventListener('click', () => doDispatch('entregado'));
   document.getElementById('btnDispatchRetirado')?.addEventListener('click', () => doDispatch('retirado'));
 
-  // Open local order (edit)
+  // Open local order (click row)
   document.querySelectorAll('[data-local-order]').forEach(row => row.addEventListener('click', () => {
     const o = S.localOrders.find(x=>x.id===row.dataset.localOrder);
     if (!o) return;
-    if (isAdmin() && o.status==='despachado') {
+    if (isAdmin() && (o.status==='despachado'||o.status==='revisado')) {
       S.localOrderDraft = { ...o, local_order_modifications: o.local_order_modifications||[] };
       S.modal = 'adminLocalReview'; S.err = null; draw(); return;
     }
     if (o.status === 'revisado' || o.status === 'despachado') {
       S.localOrderDraft = { ...o }; S.modal = 'adminLocalReview'; S.err = null; draw(); return;
     }
-    // Editable
+    // Editable (borrador or pendiente)
     const items = (o.local_order_items||[]).map(i=>({
       productColorId: i.product_color_id,
       price: i.price||'', priceCurrency: i.price_currency||'ARS',
       rolls: (i.local_order_rolls||[]).sort((a,b)=>a.roll_number-b.roll_number).map(r=>r.quantity+''),
     }));
-    S.localOrderDraft = { orderId:o.id, moveType:o.move_type, clientId:o.client_id, selectedClient:o.clients||null, clientSearch:o.clients?.name||'', showNewClient:false, newClient:{}, items, productSearch:'', paymentStatus:o.payment_status, paymentAmount:o.payment_amount||'', paymentType:o.payment_type||'', notes:o.notes||'', status:o.status };
-    S.localOrderStep = 2; S.err = null; S.modal = 'localOrder'; draw();
+    S.localOrderDraft = { orderId:o.id, moveType:o.move_type, date:(o.order_date||o.created_at||'').slice(0,10), clientId:o.client_id, selectedClient:o.clients||null, clientSearch:o.clients?.name||'', showNewClient:false, newClient:{}, items, productSearch:'', paymentStatus:o.payment_status, paymentAmount:o.payment_amount||'', paymentType:o.payment_type||'', notes:o.notes||'', status:o.status };
+    S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
   }));
 
   // Admin open dispatched local order
@@ -4459,27 +4821,6 @@ function bindAll() {
     await dbLocalOrders(null); draw();
   });
 
-  // Local search
-  document.getElementById('fLocalSearch')?.addEventListener('input', e => {
-    S.localSearchQ = e.target.value; const pos=e.target.selectionStart; draw();
-    const el=document.getElementById('fLocalSearch'); if(el){el.focus();el.setSelectionRange(pos,pos);}
-  });
-  document.getElementById('fLocalHistSearch')?.addEventListener('input', e => {
-    S.localHistSearch = e.target.value; const pos=e.target.selectionStart; draw();
-    const el=document.getElementById('fLocalHistSearch'); if(el){el.focus();el.setSelectionRange(pos,pos);}
-  });
-  document.getElementById('fLocalHistType')?.addEventListener('change', e => { S.localHistFilter=e.target.value; draw(); });
-  document.getElementById('fLocalHistDesde')?.addEventListener('change', e => { S.localHistDesde=e.target.value; draw(); });
-  document.getElementById('fLocalHistHasta')?.addEventListener('change', e => { S.localHistHasta=e.target.value; draw(); });
-  // Local tab switch
-  document.querySelectorAll('.tab-btn[data-tab]').forEach(b => {
-    if (!isLocal()) return;
-    b.addEventListener('click', async () => {
-      S.tab = b.dataset.tab; draw();
-      if (S.tab==='historial') { await dbLocalOrders(S.profile.local_id); draw(); }
-    });
-  });
-
 }
 
 // ============================================================
@@ -4501,7 +4842,10 @@ async function boot() {
     S.view = 'admin';
     if (isBulltex()) await Promise.all([dbProducts(), dbOrders(), dbRemitos(), dbLocals(), dbLocalOrders(null), dbLocalPriceLists()]);
   } else if (profile.role === 'local') {
-    S.tab = 'pedidos';
+    S.localTab = 'calendario';
+    S.localCalYear = new Date().getFullYear();
+    S.localCalMonth = new Date().getMonth();
+    S.localDispFilter = 'revisar';
     S.view = 'local';
     await Promise.all([dbLocals(), dbLocalOrders(profile.local_id), dbLocalClients(profile.local_id), dbLocalPriceLists(), dbProducts()]);
   } else {

@@ -1327,17 +1327,22 @@ function mAddAction() {
       body = `
         <div class="alert alert-error mb-3">No tenés clientes en tu cartera. Primero agregá clientes desde "Mi cartera".</div>`;
     } else {
+      const acSq = (d.clientSearch||'').toLowerCase().trim();
+      const acFiltered = acSq ? myClients.filter(c=>c.name.toLowerCase().includes(acSq)||(c.phone||'').includes(acSq)) : myClients;
       body = `
         <p class="text-sm text-muted mb-3">¿Con qué cliente?</p>
-        <div style="max-height:52vh;overflow-y:auto">
-          ${myClients.map(c=>`
-            <button class="client-btn${d.clientId===c.id?' selected':''}" data-client="${c.id}" data-cname="${c.name}">
-              <div class="client-avatar">${avatar(c.name)}</div>
-              <div>
-                <div class="client-info-name">${c.name}</div>
-                ${c.phone?`<div class="client-info-phone">${c.phone}</div>`:''}
-              </div>
-            </button>`).join('')}
+        <input type="text" id="fActionClientSearch" placeholder="🔍 Buscar cliente..." value="${d.clientSearch||''}" style="width:100%;margin-bottom:8px">
+        <div style="max-height:46vh;overflow-y:auto">
+          ${acFiltered.length===0
+            ? `<div class="empty-state" style="padding:16px"><div class="empty-icon">🔍</div>Sin resultados</div>`
+            : acFiltered.map(c=>`
+              <button class="client-btn${d.clientId===c.id?' selected':''}" data-client="${c.id}" data-cname="${c.name}">
+                <div class="client-avatar">${avatar(c.name)}</div>
+                <div>
+                  <div class="client-info-name">${c.name}</div>
+                  ${c.phone?`<div class="client-info-phone">${c.phone}</div>`:''}
+                </div>
+              </button>`).join('')}
         </div>`;
     }
   } else {
@@ -2404,14 +2409,19 @@ function mNewOrder() {
   let body = '';
 
   if (step === 1) {
+    const ocSq = (o.clientSearch||'').toLowerCase().trim();
+    const ocFiltered = ocSq ? myClients.filter(c=>c.name.toLowerCase().includes(ocSq)||(c.phone||'').includes(ocSq)) : myClients;
     body = `<p class="text-sm text-muted mb-3">¿Para qué cliente?</p>
+      ${myClients.length>5?`<input type="text" id="fOrderClientSearch" placeholder="🔍 Buscar cliente..." value="${o.clientSearch||''}" style="width:100%;margin-bottom:8px">`:'' }
       <div style="max-height:50vh;overflow-y:auto">
         ${myClients.length===0
           ? `<div class="alert alert-error">No tenés clientes. Agregá desde "Mi Cartera" primero.</div>`
-          : myClients.map(c=>`<button class="client-btn${o.clientId===c.id?' selected':''}" data-oc="${c.id}" data-ocname="${c.name}" data-ocaddr="${c.address||''}">
-              <div class="client-avatar">${avatar(c.name)}</div>
-              <div><div class="client-info-name">${c.name}</div>${c.address?`<div class="client-info-phone">${c.address}</div>`:''}</div>
-             </button>`).join('')}
+          : ocFiltered.length===0
+            ? `<div class="empty-state" style="padding:16px"><div class="empty-icon">🔍</div>Sin resultados</div>`
+            : ocFiltered.map(c=>`<button class="client-btn${o.clientId===c.id?' selected':''}" data-oc="${c.id}" data-ocname="${c.name}" data-ocaddr="${c.address||''}">
+                <div class="client-avatar">${avatar(c.name)}</div>
+                <div><div class="client-info-name">${c.name}</div>${c.address?`<div class="client-info-phone">${c.address}</div>`:''}</div>
+               </button>`).join('')}
       </div>`;
 
   } else if (step === 2) {
@@ -2448,7 +2458,7 @@ function mNewOrder() {
 
     body=`
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-        <input type="text" id="fStockSearch" placeholder="🔍 Buscar artículo o color..." value="${o.searchQuery||''}"
+        <input type="text" id="fOrderStockSearch" placeholder="🔍 Buscar artículo o color..." value="${o.searchQuery||''}"
           style="flex:1;padding:8px 10px;border:1.5px solid var(--gray-200);border-radius:var(--radius);font-size:14px" autocomplete="off">
         <span id="step3Badge" style="background:var(--blue);color:white;border-radius:99px;padding:3px 10px;font-size:13px;white-space:nowrap;font-weight:600;display:${totalRollos>0?'inline':'none'}">${totalRollos} rollo${totalRollos!==1?'s':''}</span>
       </div>
@@ -4688,7 +4698,7 @@ function bindAll() {
       closeModal();
       if (!S.products?.length) { S.loading=true; draw(); await dbProducts(); S.loading=false; }
       S.newOrder = {
-        step:1, clientId:null, clientName:'', clientAddress:'',
+        step:1, clientId:null, clientName:'', clientAddress:'', clientSearch:'',
         paymentType:null, chequeTerms:[], transferDays:'', ceType:'inmediata',
         ceDate:'', ccTerm:'', paymentNote:'', invoiced:false,
         items:[], deliveryAddress:'', deliveryType:null, deliveryDatetime:'', sellerNote:'',
@@ -5021,7 +5031,7 @@ function bindAll() {
 
   const openNewOrder = () => {
     S.newOrder = {
-      step:1, clientId:null, clientName:'', clientAddress:'',
+      step:1, clientId:null, clientName:'', clientAddress:'', clientSearch:'',
       paymentType:null, chequeTerms:[], transferDays:'', ceType:'inmediata',
       ceDate:'', ccTerm:'', paymentNote:'', invoiced:false,
       items:[], deliveryAddress:'', deliveryType:null, deliveryDatetime:'', sellerNote:'',
@@ -5033,6 +5043,18 @@ function bindAll() {
   document.getElementById('btnNewOrder')?.addEventListener('click', openNewOrder);
 
   // NEW ORDER WIZARD INPUTS
+  document.getElementById('fOrderClientSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.newOrder.clientSearch=v; draw();
+    const el=document.getElementById('fOrderClientSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.getElementById('fActionClientSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.addData.clientSearch=v; draw();
+    const el=document.getElementById('fActionClientSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
   document.querySelectorAll('[data-oc]').forEach(b => b.addEventListener('click', () => {
     S.newOrder.clientId=b.dataset.oc; S.newOrder.clientName=b.dataset.ocname; S.newOrder.clientAddress=b.dataset.ocaddr||''; draw();
   }));
@@ -5054,9 +5076,10 @@ function bindAll() {
   document.querySelectorAll('[data-inv]').forEach(b => b.addEventListener('click', () => {
     S.newOrder.invoiced=b.dataset.inv==='1'; draw();
   }));
-  document.getElementById('fStockSearch')?.addEventListener('input', e => {
-    S.newOrder.searchQuery = e.target.value;
-    const sq = e.target.value.toLowerCase().trim();
+  document.getElementById('fOrderStockSearch')?.addEventListener('input', e => {
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.newOrder.searchQuery = v;
+    const sq = v.toLowerCase().trim();
     document.querySelectorAll('#step3List .pc-row').forEach(row => {
       const color = row.dataset.color||'';
       const prod  = row.dataset.prodname||'';
@@ -5066,6 +5089,8 @@ function bindAll() {
       const visible = [...grp.querySelectorAll('.pc-row')].some(r => r.style.display !== 'none');
       grp.style.display = visible ? '' : 'none';
     });
+    const el=document.getElementById('fOrderStockSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
   });
 
   function refreshStep3() {

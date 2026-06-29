@@ -3115,6 +3115,16 @@ function vLocalClientes() {
 
 // ── ACTIVOS TAB ───────────────────────────────────────────────────────────────
 
+// ── SORT HEADER HELPER ───────────────────────────────────────────────────────
+function thSort(label, col, sort, sortId, align) {
+  const active  = sort.col === col;
+  const arrow   = active ? (sort.dir==='asc' ? ' ↑' : ' ↓') : '';
+  const nextDir = active ? (sort.dir==='asc' ? 'desc' : 'asc') : 'desc';
+  const sk      = sortId==='activos-sort' ? 'localActivosSort' : 'localDispSort';
+  const style   = 'cursor:pointer;user-select:none;white-space:nowrap;' + (align==='right' ? 'text-align:right' : '');
+  return `<th style="${style}" onclick="S.${sk}={col:'${col}',dir:'${nextDir}'};draw()">${label}${arrow}</th>`;
+}
+
 // ── LOCAL LIST HELPERS ────────────────────────────────────────────────────────
 function calcOrderTotal(o) {
   return (o.local_order_items||[]).reduce((s,i)=>{
@@ -4037,7 +4047,13 @@ async function draw() {
     }
   }
 
-  app.innerHTML = nav(tabs) + companyBar() + `<div class="page">${content}</div>`;
+  try {
+    app.innerHTML = nav(tabs) + companyBar() + `<div class="page">${content}</div>`;
+  } catch(err) {
+    console.error('[draw] render error:', err);
+    app.innerHTML = `<div class="page"><div class="card" style="color:red;padding:20px">Error al renderizar: ${err.message}<br><small>${err.stack||''}</small></div></div>`;
+    return;
+  }
 
   // Append modal
   const modalHtml = {

@@ -951,58 +951,30 @@ function vAdminLocalesSection() {
   const selId   = S.adminLocalId;
   const subTab  = S.adminLocalSubTab || 'activos';
 
+  // Mark admin context so vLocalActivos/vLocalDespachados know
+  S.adminViewLocalId = selId || null;
+
   const storeBtns = locals.map(l=>
     '<button class="tab-btn '+(l.id===selId?'active':'')+'" data-admin-local-id="'+l.id+'">'+(l.name||'Local')+'</button>'
   ).join('');
 
-  const subNav2 = `<div class="subnav" style="background:white;border-top:none">
+  if (!selId) return `<div class="subnav">${storeBtns}</div>
+    <div class="empty-state" style="padding:40px"><div class="empty-icon">🏪</div>Seleccioná un local</div>`;
+
+  const subNav2 = `<div class="subnav" style="background:white">
     <button class="tab-btn ${subTab==='activos'?'active':''}"     data-admin-local-sub="activos">📋 Activos</button>
     <button class="tab-btn ${subTab==='despachados'?'active':''}" data-admin-local-sub="despachados">📦 Despachados</button>
     <span style="flex:1"></span>
     <button class="btn btn-sm btn-secondary" id="btnReloadAdminLocal" style="margin:auto 0">↺ Actualizar</button>
   </div>`;
 
-  if (!selId) return `<div class="subnav">${storeBtns}</div><div class="empty-state" style="padding:40px"><div class="empty-icon">🏪</div>Seleccioná un local</div>`;
+  // Temporarily swap S.localOrders with the selected local's orders
+  const savedOrders = S.localOrders;
+  S.localOrders = (savedOrders||[]).filter(o=>o.local_id===selId);
+  const content = subTab==='activos' ? vLocalActivos() : vLocalDespachados();
+  S.localOrders = savedOrders;
 
-  const allOrders  = (S.localOrders||[]).filter(o=>o.local_id===selId);
-  const statusFilter = subTab==='activos'
-    ? o=>o.status==='borrador'||o.status==='pendiente'
-    : o=>o.status==='despachado'||o.status==='revisado';
-  const list = allOrders.filter(statusFilter).sort((a,b)=>(b.order_date||b.created_at||'').localeCompare(a.order_date||a.created_at||''));
-
-  const emptyIcon = subTab==='activos' ? '📋' : '📦';
-  const emptyMsg  = subTab==='activos' ? 'No hay pedidos activos' : 'No hay pedidos despachados';
-
-  const rows = list.length===0
-    ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">${emptyIcon}</div>${emptyMsg}</div></td></tr>`
-    : list.map(o=>{
-        const total=calcOrderTotal(o);
-        const statusBadge=`<span style="background:${
-          o.status==='borrador'?'var(--gray-400)':o.status==='pendiente'?'var(--blue)':o.status==='despachado'?'var(--orange, #f97316)':'var(--green)'
-        };color:white;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${o.status}</span>`;
-        const devBtn=(o.move_type==='devolucion'&&o.status==='despachado')
-          ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" onclick="event.stopPropagation()" style="padding:2px 8px;font-size:11px">✅ Devuelto</button>`:'';
-        return `<tr style="cursor:pointer" data-local-order="${o.id}">
-          <td style="font-size:12px;white-space:nowrap">${(o.order_date||o.created_at||'').slice(0,10)}</td>
-          <td><strong>${o.order_number||'—'}</strong></td>
-          <td>${o.clients?.name||'<span style="color:var(--gray-400)">Sin cliente</span>'}</td>
-          <td>${pill(o.move_type)}</td>
-          <td>${statusBadge}</td>
-          <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
-          <td style="display:flex;gap:4px">${devBtn}<button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
-        </tr>`;
-      }).join('');
-
-  return `<div class="subnav">${storeBtns}</div>
-  ${subNav2}
-  <div class="card" style="padding:0;margin-top:0;border-top:none;border-radius:0 0 var(--radius) var(--radius)">
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Fecha</th><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th></th></tr></thead>
-        <tbody>${rows}</tbody>
-      </table>
-    </div>
-  </div>`;
+  return `<div class="subnav">${storeBtns}</div>${subNav2}${content}`;
 }
 
 function vAdminClientes() {
@@ -3351,13 +3323,21 @@ function vLocalActivos() {
         </label>
         <button class="btn btn-sm btn-secondary" id="btnExportActivosCSV">📊 Excel</button>
         <button class="btn btn-sm btn-secondary" id="btnExportActivosPDF">🖨️ PDF</button>
-        <button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>
+        ${!S.adminViewLocalId?'<button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>':''}
       </div>
     </div>
     ${filterPanel}${sortPanel}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
+        <thead><tr>
+          ${thSort('Fecha','fecha',sort,'activos-sort')}
+          <th>N°</th>
+          ${thSort('Cliente','cliente',sort,'activos-sort')}
+          <th>Tipo</th>
+          <th>Estado</th>
+          ${thSort('Total','monto',sort,'activos-sort','right')}
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -3536,7 +3516,16 @@ function vLocalDespachados() {
     ${filterPanel}${sortPanel}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th><th></th></tr></thead>
+        <thead><tr>
+          ${thSort('Fecha','fecha',sort,'disp-sort')}
+          <th>N°</th>
+          ${thSort('Cliente','cliente',sort,'disp-sort')}
+          <th>Tipo</th>
+          <th>Estado</th>
+          ${thSort('Total','monto',sort,'disp-sort','right')}
+          <th></th>
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -4084,6 +4073,7 @@ function bindAll() {
     if (['acciones','reportes'].includes(S.tab)) await dbActions(S.year, S.month);
     if (S.tab==='clientes')     { await dbClients('all'); await dbSellers(); await dbCompanies(); }
     if (S.tab==='locales')      { await dbLocalOrders(null); await dbLocals(); S.adminLocalSubTab = S.adminLocalSubTab||'activos'; }
+    if (S.tab!=='locales')      S.adminViewLocalId = null;
     if (S.tab==='vendedores' && !S.adminVendTab) S.adminVendTab = 'equipo';
     if (S.tab==='vendedores')   { await dbSellers(); await dbClients('all'); await dbCompanies(); }
     if (S.tab==='micalendario') { await dbClients(S.profile.id); await dbActions(S.year, S.month); }
@@ -5316,6 +5306,7 @@ function bindAll() {
     const filters=S.activosFilters||{}; const sort=S.localActivosSort||{col:'fecha',dir:'desc'};
     const sq=(S.localActivosSearch||'').toLowerCase().trim();
     let list=(S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    if(S.adminViewLocalId) list=list.filter(o=>o.local_id===S.adminViewLocalId);
     if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
     list=sortLocalList(applyLocalFilters(list,filters),sort);
     exportListCSV(list,!!S.activosExportDetalle,'pedidos_activos.csv');
@@ -5324,9 +5315,11 @@ function bindAll() {
     const filters=S.activosFilters||{}; const sort=S.localActivosSort||{col:'fecha',dir:'desc'};
     const sq=(S.localActivosSearch||'').toLowerCase().trim();
     let list=(S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    if(S.adminViewLocalId) list=list.filter(o=>o.local_id===S.adminViewLocalId);
     if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
     list=sortLocalList(applyLocalFilters(list,filters),sort);
-    exportListPDF(list,!!S.activosExportDetalle,'Pedidos Activos');
+    const localName=(S.locals||[]).find(l=>l.id===S.adminViewLocalId)?.name||'';
+    exportListPDF(list,!!S.activosExportDetalle,(localName?localName+' — ':'')+'Pedidos Activos');
   });
 
   // ── DESPACHADOS: filter/sort/export handlers ──────────────────────────────────
@@ -5361,6 +5354,7 @@ function bindAll() {
     const filters=S.dispFilters||{}; const sort=S.localDispSort||{col:'fecha',dir:'desc'};
     const sq=(S.localDispSearch||'').toLowerCase().trim();
     let list=(S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    if(S.adminViewLocalId) list=list.filter(o=>o.local_id===S.adminViewLocalId);
     if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
     list=sortLocalList(applyLocalFilters(list,filters),sort);
     exportListCSV(list,!!S.dispExportDetalle,'pedidos_despachados.csv');
@@ -5370,9 +5364,11 @@ function bindAll() {
     const filters=S.dispFilters||{}; const sort=S.localDispSort||{col:'fecha',dir:'desc'};
     const sq=(S.localDispSearch||'').toLowerCase().trim();
     let list=(S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    if(S.adminViewLocalId) list=list.filter(o=>o.local_id===S.adminViewLocalId);
     if(sq) list=list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq));
     list=sortLocalList(applyLocalFilters(list,filters),sort);
-    exportListPDF(list,!!S.dispExportDetalle,'Pedidos Despachados');
+    const localName=(S.locals||[]).find(l=>l.id===S.adminViewLocalId)?.name||'';
+    exportListPDF(list,!!S.dispExportDetalle,(localName?localName+' — ':'')+'Pedidos Despachados');
   });
 
 

@@ -586,6 +586,12 @@ async function dbAddCollection(d) {
   if (c) c.balance = (c.balance||0) + d.amountAccount;
   return null;
 }
+async function dbAllCollections() {
+  const { data } = await sb.from('collections')
+    .select('id, date, amount_account, payment_type, payment_currency, client_id, notes')
+    .order('date', {ascending:false});
+  S.allCollections = data || [];
+}
 async function dbCreateSeller(email, name, pass, companyId, role='seller') {
   const { data, error } = await sb.auth.signUp({ email, password: pass, options: { data: { name } } });
   if (error) return error;
@@ -989,14 +995,19 @@ function vAdminLocalesSection() {
 
 // ── ADMIN PAGOS ──────────────────────────────────────────────────────────────
 function vAdminPagos() {
-  const sub  = S.pagosTab || 'por-cliente';
+  const sub  = S.pagosTab || 'nuevo';
   const form = S.pagosForm || {};
   const pt   = form.cobPayType||'';
   const amt  = form.cobAmount||'';
   const tc   = form.cobTC||'';
 
-  // ── Por Cliente ──────────────────────────────────────────────────────────
-  if (sub==='por-cliente') {
+  const subNav = `<div class="subnav">
+    <button class="tab-btn${sub==='nuevo'?' active':''}" data-pagos-tab="nuevo">➕ Nuevo pago</button>
+    <button class="tab-btn${sub==='consultar'?' active':''}" data-pagos-tab="consultar">📋 Consultar pagos</button>
+  </div>`;
+
+  // ── NUEVO PAGO ──────────────────────────────────────────────────────────────
+  if (sub === 'nuevo') {
     const sq = (S.pagosClientSearch||'').toLowerCase().trim();
     const clients = (S.clients||[]).filter(c=>!sq||c.name.toLowerCase().includes(sq));
     const sel = S.pagosClientId ? (S.clients||[]).find(c=>c.id===S.pagosClientId) : null;
@@ -1036,10 +1047,7 @@ function vAdminPagos() {
         <div id="pagosMsg" style="margin-top:8px;font-size:13px;color:var(--green)"></div>
       </div>` : '';
 
-    return `<div class="subnav">
-      <button class="tab-btn active"  data-pagos-tab="por-cliente">👥 Por Cliente</button>
-      <button class="tab-btn"         data-pagos-tab="por-pedido">📋 Por Pedido</button>
-    </div>
+    return `${subNav}
     <div style="padding:12px 0 0">
       <input type="text" id="fPagosClientSearch" placeholder="🔍 Buscar cliente..." value="${S.pagosClientSearch||''}" style="max-width:280px">
     </div>
@@ -1051,66 +1059,64 @@ function vAdminPagos() {
     ${payForm}`;
   }
 
-  // ── Por Pedido ────────────────────────────────────────────────────────────
-  const oSq = (S.pagosOrderSearch||'').toLowerCase().trim();
-  const unpaid = (S.orders||[]).filter(o=>o.status==='aprobado'||o.status==='armando_remito'||o.status==='pendiente');
-  const filtered = oSq ? unpaid.filter(o=>(o.order_number||'').toLowerCase().includes(oSq)||(o.clients?.name||'').toLowerCase().includes(oSq)) : unpaid;
-  const selO = S.pagosOrderId ? (S.orders||[]).find(o=>o.id===S.pagosOrderId) : null;
-  const selC = selO ? (S.clients||[]).find(c=>c.id===selO.client_id) : null;
-  const cur2 = selC?.balance_currency||'USD';
-  const needsTC2 = selC && cur2==='USD' && pt && pt!=='efectivo_usd';
+  // ── CONSULTAR PAGOS ─────────────────────────────────────────────────────────
+  const sort   = S.pagosColSort || {col:'fecha',dir:'desc'};
+  const colSq  = (S.pagosColSearch||'').toLowerCase().trim();
+  const colPT  = S.pagosColPayType||'';
+  const colCur = S.pagosColCurrency||'';
+  const fmtPT  = t => ({efectivo_ars:'Efectivo $',efectivo_usd:'Efectivo U$D',transferencia:'Transferencia',cheque:'Cheque',otro:'Otro'}[t]||t||'—');
 
-  const orderRows = filtered.map(o=>{
-    const c=(S.clients||[]).find(c=>c.id===o.client_id);
-    const tot=(o.order_items||[]).reduce((s,i)=>s+parseFloat(i.price_approved||i.price||0)*parseFloat(i.quantity||0),0);
-    return `<tr style="cursor:pointer${S.pagosOrderId===o.id?';background:var(--blue-50)':''}" data-pagos-order="${o.id}">
-      <td><strong>${o.order_number||'—'}</strong></td>
-      <td>${c?.name||'—'}</td>
-      <td>${pill(o.status)}</td>
-      <td style="text-align:right">${tot>0?'$ '+tot.toLocaleString('es-AR',{minimumFractionDigits:2}):'—'}</td>
-    </tr>`;
-  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:16px">Sin pedidos pendientes</td></tr>`;
+  let rows = (S.allCollections||[]).map(col => {
+    const cli = (S.clients||[]).find(c=>c.id===col.client_id);
+    return { ...col, clientName: cli?.name||'—' };
+  });
+  if (colSq)  rows = rows.filter(r=>r.clientName.toLowerCase().includes(colSq));
+  if (colPT)  rows = rows.filter(r=>r.payment_type===colPT);
+  if (colCur) rows = rows.filter(r=>r.payment_currency===colCur);
 
-  const payForm2 = selO ? `
-    <div class="card mt-3" style="padding:16px">
-      <div class="card-title" style="margin-bottom:12px">💳 Registrar pago — Pedido <strong>${selO.order_number||'?'}</strong>
-        <span style="font-size:12px;margin-left:8px;color:var(--gray-500)">Cliente: ${selC?.name||'?'} · Saldo: ${selC?fmtBalance(selC):'—'}</span>
-      </div>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
-        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Forma de pago</div>
-          <select id="fPagosPayType" style="min-width:160px">
-            <option value="">Seleccionar...</option>
-            <option value="efectivo_ars" ${pt==='efectivo_ars'?'selected':''}>Efectivo $</option>
-            <option value="efectivo_usd" ${pt==='efectivo_usd'?'selected':''}>Efectivo U$D</option>
-            <option value="transferencia" ${pt==='transferencia'?'selected':''}>Transferencia</option>
-            <option value="cheque" ${pt==='cheque'?'selected':''}>Cheque</option>
-            <option value="otro" ${pt==='otro'?'selected':''}>Otro</option>
-          </select>
-        </div>
-        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto cobrado</div>
-          <input type="number" id="fPagosAmt" min="0" step="0.01" placeholder="0.00" value="${amt}" style="width:120px">
-        </div>
-        ${needsTC2 ? `<div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Tipo de cambio</div>
-          <input type="number" id="fPagosTC" min="0" step="0.01" placeholder="0.00" value="${tc}" style="width:100px">
-        </div>` : ''}
-        <div><button class="btn btn-primary" id="btnAplicarPago">✅ Aplicar pago</button></div>
-      </div>
-      <div id="pagosMsg" style="margin-top:8px;font-size:13px;color:var(--green)"></div>
-    </div>` : '';
+  const colKey = {fecha:'date',cliente:'clientName',paytype:'payment_type',moneda:'payment_currency',monto:'amount_account'};
+  rows.sort((a,b)=>{
+    const k=colKey[sort.col]||'date';
+    let va=a[k]||'', vb=b[k]||'';
+    if(sort.col==='monto'){va=parseFloat(va)||0;vb=parseFloat(vb)||0;}
+    const c=va<vb?-1:va>vb?1:0; return sort.dir==='asc'?c:-c;
+  });
 
-  return `<div class="subnav">
-    <button class="tab-btn"       data-pagos-tab="por-cliente">👥 Por Cliente</button>
-    <button class="tab-btn active" data-pagos-tab="por-pedido">📋 Por Pedido</button>
-  </div>
-  <div style="padding:12px 0 0">
-    <input type="text" id="fPagosOrderSearch" placeholder="🔍 Buscar N° o cliente..." value="${S.pagosOrderSearch||''}" style="max-width:280px">
+  const thC = (lbl,col) => {
+    const act=sort.col===col, arr=act?(sort.dir==='asc'?' ↑':' ↓'):'';
+    return `<th style="cursor:pointer;white-space:nowrap" data-pagos-col-sort="${col}">${lbl}${arr}</th>`;
+  };
+
+  const tableRows = rows.length ? rows.map(r=>`<tr>
+    <td>${r.date||'—'}</td>
+    <td>${r.clientName}</td>
+    <td>${fmtPT(r.payment_type)}</td>
+    <td>${r.payment_currency||'—'}</td>
+    <td style="text-align:right">${parseFloat(r.amount_account||0).toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+  </tr>`).join('') : `<tr><td colspan="5" style="text-align:center;color:var(--gray-400);padding:16px">Sin pagos registrados</td></tr>`;
+
+  return `${subNav}
+  <div style="display:flex;gap:8px;flex-wrap:wrap;padding:12px 0 0;align-items:center">
+    <input type="text" id="fPagosColSearch" placeholder="🔍 Buscar cliente..." value="${S.pagosColSearch||''}" style="max-width:220px">
+    <select id="fPagosColPayType" style="min-width:160px">
+      <option value="">Todas las formas de pago</option>
+      <option value="efectivo_ars" ${colPT==='efectivo_ars'?'selected':''}>Efectivo $</option>
+      <option value="efectivo_usd" ${colPT==='efectivo_usd'?'selected':''}>Efectivo U$D</option>
+      <option value="transferencia" ${colPT==='transferencia'?'selected':''}>Transferencia</option>
+      <option value="cheque" ${colPT==='cheque'?'selected':''}>Cheque</option>
+      <option value="otro" ${colPT==='otro'?'selected':''}>Otro</option>
+    </select>
+    <select id="fPagosColCurrency" style="min-width:120px">
+      <option value="">Todas las monedas</option>
+      <option value="ARS" ${colCur==='ARS'?'selected':''}>ARS</option>
+      <option value="USD" ${colCur==='USD'?'selected':''}>USD</option>
+    </select>
   </div>
   <div class="table-wrap mt-2">
-    <table><thead><tr><th>N° Pedido</th><th>Cliente</th><th>Estado</th><th style="text-align:right">Total</th></tr></thead>
-      <tbody>${orderRows}</tbody>
-    </table>
-  </div>
-  ${payForm2}`;
+    <table><thead><tr>
+      ${thC('Fecha','fecha')}${thC('Cliente','cliente')}${thC('Forma de pago','paytype')}${thC('Moneda','moneda')}${thC('Monto','monto')}
+    </tr></thead><tbody>${tableRows}</tbody></table>
+  </div>`;
 }
 
 function vAdminClientes() {
@@ -1118,12 +1124,14 @@ function vAdminClientes() {
     ? S.sellers.filter(s => s.company_id === S.filterCompany)
     : S.sellers;
   const selOpts = visibleSellers.map(s=>`<option value="${s.id}">${s.name}${isOwner()?` (${companyName(s.company_id)})`:''}</option>`).join('');
-  const visibleClients = isOwner() && S.filterCompany !== 'all'
+  const adminCSq = (S.adminClientSearch||'').toLowerCase().trim();
+  const allVisible = isOwner() && S.filterCompany !== 'all'
     ? S.clients.filter(c => {
         const s = S.sellers.find(x=>x.id===c.seller_id);
         return s?.company_id === S.filterCompany;
       })
     : S.clients;
+  const visibleClients = adminCSq ? allVisible.filter(c=>c.name.toLowerCase().includes(adminCSq)||(c.phone||'').includes(adminCSq)) : allVisible;
   const rows = visibleClients.length === 0
     ? `<tr><td colspan="${isOwner()?5:4}"><div class="empty-state"><div class="empty-icon">👥</div>Sin clientes cargados</div></td></tr>`
     : visibleClients.map(c => {
@@ -1163,8 +1171,11 @@ function vAdminClientes() {
   </div>
   <div class="card">
     <div class="card-header">
-      <div class="card-title">Todos los clientes (${S.clients.length})</div>
-      <button class="btn btn-primary btn-sm" id="btnAddClientAdmin">+ Agregar</button>
+      <div class="card-title">Todos los clientes (${visibleClients.length}${adminCSq?' de '+S.clients.length:''})</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="text" id="fAdminClientSearch" placeholder="🔍 Buscar cliente..." value="${S.adminClientSearch||''}" style="max-width:240px">
+        <button class="btn btn-primary btn-sm" id="btnAddClientAdmin">+ Agregar</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
@@ -4445,7 +4456,7 @@ function bindAll() {
     if (S.tab==='vendedores')   { await dbSellers(); await dbClients('all'); await dbCompanies(); }
     if (S.tab==='micalendario') { await dbClients(S.profile.id); await dbActions(S.year, S.month); }
     if (S.tab==='micartera')    { await dbClients(S.profile.id); }
-    if (S.tab==='pagos')        { await dbClients('all'); await dbOrders(); }
+    if (S.tab==='pagos')        { await dbClients('all'); if(S.pagosTab==='consultar') await dbAllCollections(); }
     if (S.tab==='stock'   && isBulltex()) await dbProducts();
     if (S.tab==='pedidos' && isBulltex()) { await dbOrders(); if (S.profile.role==='seller') await dbProducts(); }
     if (S.tab==='remitos' && isBulltex()) { await Promise.all([dbOrders(), dbRemitos()]); }
@@ -4538,18 +4549,33 @@ function bindAll() {
   }));
 
   // ── PAGOS ─────────────────────────────────────────────────────────────────
-  document.querySelectorAll('[data-pagos-tab]').forEach(b=>b.addEventListener('click',()=>{
-    S.pagosTab=b.dataset.pagosTab; S.pagosClientId=null; S.pagosOrderId=null;
-    S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
+  document.querySelectorAll('[data-pagos-tab]').forEach(b=>b.addEventListener('click', async ()=>{
+    S.pagosTab=b.dataset.pagosTab; S.pagosClientId=null;
+    S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''};
+    if(S.pagosTab==='consultar') await dbAllCollections();
+    draw();
   }));
   document.querySelectorAll('[data-pagos-client]').forEach(b=>b.addEventListener('click',()=>{
     S.pagosClientId=b.dataset.pagosClient; S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
   }));
-  document.querySelectorAll('[data-pagos-order]').forEach(b=>b.addEventListener('click',()=>{
-    S.pagosOrderId=b.dataset.pagosOrder; S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
+  document.getElementById('fPagosClientSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.pagosClientSearch=v; draw();
+    const el=document.getElementById('fPagosClientSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.getElementById('fPagosColSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.pagosColSearch=v; draw();
+    const el=document.getElementById('fPagosColSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.getElementById('fPagosColPayType')?.addEventListener('change',e=>{S.pagosColPayType=e.target.value;draw();});
+  document.getElementById('fPagosColCurrency')?.addEventListener('change',e=>{S.pagosColCurrency=e.target.value;draw();});
+  document.querySelectorAll('[data-pagos-col-sort]').forEach(b=>b.addEventListener('click',()=>{
+    const col=b.dataset.pagosColSort;
+    S.pagosColSort={col,dir:(S.pagosColSort?.col===col&&S.pagosColSort?.dir==='desc'?'asc':'desc')};draw();
   }));
-  document.getElementById('fPagosClientSearch')?.addEventListener('input',e=>{S.pagosClientSearch=e.target.value;draw();});
-  document.getElementById('fPagosOrderSearch')?.addEventListener('input',e=>{S.pagosOrderSearch=e.target.value;draw();});
   document.getElementById('fPagosPayType')?.addEventListener('change',e=>{
     if(!S.pagosForm)S.pagosForm={};
     S.pagosForm.cobPayType=e.target.value; S.pagosForm.cobAmount=document.getElementById('fPagosAmt')?.value||'';
@@ -4583,6 +4609,12 @@ function bindAll() {
     setTimeout(()=>draw(), 1200);
   });
 
+  document.getElementById('fAdminClientSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.adminClientSearch=v; draw();
+    const el=document.getElementById('fAdminClientSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
   document.getElementById('btnLogout')?.addEventListener('click', async () => {
     await sb.auth.signOut();
     Object.assign(S, { view:'login', user:null, profile:null, sellers:[], clients:[], actions:[], products:[], orders:[], pendingCount:0 });

@@ -414,6 +414,7 @@ const S = {
   meetingPending: 0,
   meetingForm: null,
   meetingCounterForm: null,
+  meetingUserSearch: '',
   pagosTab: 'por-cliente',
   pagosClientId: null,
   pagosOrderId: null,
@@ -3749,11 +3750,24 @@ function mMeetings() {
     <div style="border:1px solid var(--blue);border-radius:8px;padding:16px;margin-top:4px">
       <div style="font-weight:600;margin-bottom:10px">📅 Nueva solicitud de reunión</div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
-        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Para</div>
-          <select id="fMeetTo" style="min-width:180px">
-            <option value="">Seleccionar usuario...</option>
-            ${profiles.map(p=>`<option value="${p.id}" ${form.toUserId===p.id?'selected':''}>${p.role==='owner'?'ivan':p.name}</option>`).join('')}
-          </select>
+        <div style="min-width:200px"><div style="font-size:11px;font-weight:600;margin-bottom:4px">Para</div>
+          ${form.toUserId ? (() => {
+            const sel = profiles.find(p=>p.id===form.toUserId);
+            return `<div style="display:flex;align-items:center;gap:6px;background:var(--blue-50);border:1px solid var(--blue);border-radius:6px;padding:6px 10px">
+              <span style="font-weight:600">${sel?(sel.role==='owner'?'ivan':sel.name):'?'}</span>
+              <button data-meet-clear-user style="background:none;border:none;cursor:pointer;color:var(--gray-500);font-size:14px;padding:0;line-height:1">✕</button>
+            </div>`;
+          })() : `<div>
+            <input type="text" id="fMeetUserSearch" placeholder="🔍 Buscar usuario..." value="${S.meetingUserSearch||''}" style="width:100%;margin-bottom:4px">
+            <div style="max-height:160px;overflow-y:auto;border:1px solid var(--gray-200);border-radius:6px">
+              ${(() => {
+                const sq=(S.meetingUserSearch||'').toLowerCase().trim();
+                const filtered=sq?profiles.filter(p=>(p.role==='owner'?'ivan':p.name).toLowerCase().includes(sq)):profiles;
+                return filtered.length ? filtered.map(p=>`<div data-meet-pick="${p.id}" style="padding:8px 12px;cursor:pointer;border-bottom:1px solid var(--gray-100);font-size:14px" onmouseover="this.style.background='var(--blue-50)'" onmouseout="this.style.background=''">${p.role==='owner'?'ivan':p.name}</div>`).join('')
+                  : '<div style="padding:8px 12px;color:var(--gray-400);font-size:13px">Sin resultados</div>';
+              })()}
+            </div>
+          </div>`}
         </div>
         <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha</div>
           <input type="date" id="fMeetDate" value="${form.date||''}" style="width:150px">
@@ -4507,13 +4521,25 @@ function bindAll() {
     S.meetingsSubTab = b.dataset.meetSub; draw();
   }));
   document.getElementById('btnNewMeetForm')?.addEventListener('click',()=>{
-    S.meetingForm = { toUserId:'', date:'', time:'', note:'' }; draw();
+    S.meetingForm = { toUserId:'', date:'', time:'', note:'' }; S.meetingUserSearch=''; draw();
   });
   document.getElementById('btnCancelMeetForm')?.addEventListener('click',()=>{
     S.meetingForm = null; draw();
   });
+  document.getElementById('fMeetUserSearch')?.addEventListener('input',e=>{
+    const v=e.target.value; const pos=e.target.selectionStart;
+    S.meetingUserSearch=v; draw();
+    const el=document.getElementById('fMeetUserSearch');
+    if(el){el.focus();el.setSelectionRange(pos,pos);}
+  });
+  document.querySelectorAll('[data-meet-pick]').forEach(b=>b.addEventListener('click',()=>{
+    if(S.meetingForm) S.meetingForm.toUserId=b.dataset.meetPick; S.meetingUserSearch=''; draw();
+  }));
+  document.querySelector('[data-meet-clear-user]')?.addEventListener('click',()=>{
+    if(S.meetingForm) S.meetingForm.toUserId=''; S.meetingUserSearch=''; draw();
+  });
   document.getElementById('btnSendMeeting')?.addEventListener('click', async ()=>{
-    const toId   = document.getElementById('fMeetTo')?.value;
+    const toId   = S.meetingForm?.toUserId||'';
     const date   = document.getElementById('fMeetDate')?.value;
     const time   = document.getElementById('fMeetTime')?.value;
     const note   = document.getElementById('fMeetNote')?.value?.trim();
@@ -4656,8 +4682,23 @@ function bindAll() {
   });
 
   // ADD ACTION: step selectors
-  document.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', () => {
-    S.addData.type = b.dataset.type; draw();
+  document.querySelectorAll('[data-type]').forEach(b => b.addEventListener('click', async () => {
+    const t = b.dataset.type;
+    if (t === 'venta' && isBulltex()) {
+      closeModal();
+      if (!S.products?.length) { S.loading=true; draw(); await dbProducts(); S.loading=false; }
+      S.newOrder = {
+        step:1, clientId:null, clientName:'', clientAddress:'',
+        paymentType:null, chequeTerms:[], transferDays:'', ceType:'inmediata',
+        ceDate:'', ccTerm:'', paymentNote:'', invoiced:false,
+        items:[], deliveryAddress:'', deliveryType:null, deliveryDatetime:'', sellerNote:'',
+        searchQuery:'', itemUnits:{},
+      };
+      S.editOrderId = null;
+      openModal('newOrder');
+      return;
+    }
+    S.addData.type = t; draw();
   }));
   document.querySelectorAll('[data-client]').forEach(b => b.addEventListener('click', () => {
     S.addData.clientId = b.dataset.client; S.addData.clientName = b.dataset.cname; draw();
@@ -5157,7 +5198,15 @@ function bindAll() {
     const err=await dbCreateOrder(o, o.items);
     S.loading=false;
     if (err) { S.err=err; draw(); return; }
+    // Log calendar action so it appears on the seller's calendar
+    if (!S.editOrderId) {
+      await dbAddAction({
+        type: 'venta', clientId: o.clientId, clientName: o.clientName,
+        date: todayStr(), time: '', note: o.sellerNote||'',
+      });
+    }
     await dbOrders();
+    await dbActions(S.year, S.month);
     S.editOrderId=null; S.newOrder=null;
     closeModal();
   });

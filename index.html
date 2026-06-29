@@ -2983,8 +2983,9 @@ function vLocalCalendario() {
   const prevD = new Date(y, m, 0).getDate();
 
   // Build date → orders map for pendiente/borrador
+  const TYPE_COLOR = { venta:'#22c55e', reserva:'#3b82f6', devolucion:'#f97316' };
   const byDate = {};
-  (S.localOrders||[]).filter(o => o.status === 'pendiente' || o.status === 'borrador').forEach(o => {
+  (S.localOrders||[]).forEach(o => {
     const d = (o.order_date || o.created_at || '').slice(0,10);
     if (!d) return;
     if (!byDate[d]) byDate[d] = [];
@@ -3002,10 +3003,10 @@ function vLocalCalendario() {
     const acts = byDate[ds] || [];
     const isToday = today.getFullYear()===y && today.getMonth()===m && today.getDate()===d;
     const dots = acts.map(o => {
-      const col = o.status==='borrador' ? '#9ca3af' : '#3b82f6';
-      return `<div class="cal-dot" style="background:${col}"></div>`;
+      const col = TYPE_COLOR[o.move_type] || '#9ca3af';
+      return `<span title="${o.move_type||''}" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${col};margin:1px"></span>`;
     }).join('');
-    const cnt = acts.length > 0 ? `<div class="cal-count">${acts.length}</div>` : '';
+    const cnt = acts.length > 0 ? `<div style="font-size:9px;color:var(--gray-400);text-align:center">${acts.length}</div>` : '';
     cells += `<div class="cal-day${isToday?' today':''}" style="cursor:pointer" data-local-day="${ds}"><div class="cal-day-num">${d}</div><div class="cal-dots">${dots}</div>${cnt}</div>`;
   }
   const total = Math.ceil((first+days)/7)*7;
@@ -3402,8 +3403,6 @@ function mLocalOrder() {
                 <option value="pendiente"${(draft.paymentStatus||'pendiente')==='pendiente'?' selected':''}>Pendiente</option>
                 <option value="pagado"${draft.paymentStatus==='pagado'?' selected':''}>Pagado</option>
               </select></div>
-            <div class="form-group mb-0"><label>Monto pagado</label>
-              <input type="number" id="fLPayAmount" value="${draft.paymentAmount||''}" placeholder="0.00" min="0" step="0.01"></div>
           </div>
           <div class="form-group"><label>Forma de pago</label>
             <select id="fLPayType">
@@ -4668,7 +4667,10 @@ function bindAll() {
     if (S.localOrderDraft.items.find(i=>i.productColorId===pcId)) return;
     const suggested = (S.localPriceLists||[]).find(p=>p.product_color_id===pcId&&(!p.local_id||p.local_id===S.profile.local_id));
     S.localOrderDraft.items.push({ productColorId:pcId, price: suggested?.price||'', priceCurrency: suggested?.currency||'ARS', rolls:[''] });
-    S.localOrderDraft.productSearch = ''; draw();
+    draw();
+    // Restore search focus so user can keep adding articles
+    const el = document.getElementById('fLocalProductSearch');
+    if (el) { el.focus(); }
   }));
 
   // Remove article

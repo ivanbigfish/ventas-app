@@ -3065,7 +3065,7 @@ function vLocalActivos() {
     ? activos.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
     : activos;
   const rows = filtered.length === 0
-    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📋</div>${sq ? 'Sin resultados' : 'No hay pedidos activos'}</div></td></tr>`
+    ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📋</div>${sq ? 'Sin resultados' : 'No hay pedidos activos'}</div></td></tr>`
     : filtered.map(o => {
         const total = (o.local_order_items||[]).reduce((s,i) => {
           const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
@@ -3080,6 +3080,7 @@ function vLocalActivos() {
           <td><span style="background:${stColor};color:white;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${stLabel}</span></td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
           <td style="font-size:11px;color:var(--gray-400)">${(o.order_date||o.created_at||'').slice(0,10)}</td>
+          <td><button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
         </tr>`;
       }).join('');
   return `
@@ -3093,6 +3094,90 @@ function vLocalActivos() {
         <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
+    </div>
+  </div>`;
+}
+
+
+// ── LOCAL ORDER DETAIL MODAL ─────────────────────────────────────────────────
+function mLocalOrderDetail() {
+  if (S.modal !== 'localOrderDetail') return '';
+  const o = S.localOrderDraft;
+  if (!o) return '';
+  const items = o.local_order_items || [];
+  let grandTotal = 0, grandKg = 0, grandRolls = 0;
+  const itemRows = items.map(item => {
+    const prod = (S.products||[]).find(p=>(p.product_colors||[]).some(c=>c.id===item.product_color_id));
+    const pc   = (prod?.product_colors||[]).find(c=>c.id===item.product_color_id);
+    const articleName = prod?.name || '—';
+    const colorName   = pc?.color  || '—';
+    const rolls = (item.local_order_rolls||[]).slice().sort((a,b)=>a.roll_number-b.roll_number);
+    const totalKg     = rolls.reduce((s,r)=>s+parseFloat(r.quantity||0),0);
+    const totalRolls  = rolls.filter(r=>parseFloat(r.quantity||0)>0).length;
+    const price       = parseFloat(item.price||0);
+    const subtotal    = totalKg * price;
+    grandTotal += subtotal; grandKg += totalKg; grandRolls += totalRolls;
+    const rollCells = Array.from({length:10},(_,i)=>{
+      const r  = rolls.find(x=>x.roll_number===i+1);
+      const kg = r ? parseFloat(r.quantity||0) : 0;
+      return `<td style="text-align:right;font-size:12px;padding:5px 6px;border-bottom:1px solid var(--gray-200)">${kg>0?kg.toLocaleString('es-AR',{minimumFractionDigits:1,maximumFractionDigits:1}):''}</td>`;
+    }).join('');
+    return `<tr style="background:white">
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200);font-weight:600">${articleName}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200)">${colorName}</td>
+      ${rollCells}
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200);text-align:right;font-weight:600">${totalRolls}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200);text-align:right;font-weight:600">${totalKg.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200);text-align:right">${price>0?`$\u202f${price.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
+      <td style="padding:5px 8px;border-bottom:1px solid var(--gray-200);text-align:right;font-weight:600">${subtotal>0?`$\u202f${subtotal.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="modal-overlay" id="mLocalOrderDetail">
+    <div class="modal" style="max-width:96vw;width:1050px">
+      <div class="modal-header">
+        <div>
+          <h3 style="margin:0">${o.order_number||'Pedido'} — Detalle</h3>
+          <div style="color:var(--gray-400);font-size:13px;margin-top:2px">${o.clients?.name||''}&nbsp;·&nbsp;${pill(o.move_type)}&nbsp;·&nbsp;${(o.order_date||o.created_at||'').slice(0,10)}</div>
+        </div>
+        <button class="modal-close" data-close-modal>✕</button>
+      </div>
+      <div class="modal-body" style="overflow-x:auto;padding:0">
+        <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:860px">
+          <thead>
+            <tr style="background:var(--blue);color:white">
+              <th style="padding:7px 8px;text-align:left;white-space:nowrap">ARTÍCULO</th>
+              <th style="padding:7px 8px;text-align:left">Color</th>
+              <th style="padding:7px 6px;text-align:right">1</th>
+              <th style="padding:7px 6px;text-align:right">2</th>
+              <th style="padding:7px 6px;text-align:right">3</th>
+              <th style="padding:7px 6px;text-align:right">4</th>
+              <th style="padding:7px 6px;text-align:right">5</th>
+              <th style="padding:7px 6px;text-align:right">6</th>
+              <th style="padding:7px 6px;text-align:right">7</th>
+              <th style="padding:7px 6px;text-align:right">8</th>
+              <th style="padding:7px 6px;text-align:right">9</th>
+              <th style="padding:7px 6px;text-align:right">10</th>
+              <th style="padding:7px 8px;text-align:right;white-space:nowrap">Cantidad</th>
+              <th style="padding:7px 8px;text-align:right">Kilos</th>
+              <th style="padding:7px 8px;text-align:right">Precio</th>
+              <th style="padding:7px 8px;text-align:right">Subtotal</th>
+            </tr>
+          </thead>
+          <tbody>${itemRows}</tbody>
+          <tfoot>
+            <tr style="background:var(--gray-100);font-weight:700;border-top:2px solid var(--blue)">
+              <td colspan="12" style="padding:7px 8px;text-align:right">TOTAL</td>
+              <td style="padding:7px 8px;text-align:right">${grandRolls}</td>
+              <td style="padding:7px 8px;text-align:right">${grandKg.toLocaleString('es-AR',{minimumFractionDigits:2,maximumFractionDigits:2})}</td>
+              <td style="padding:7px 8px"></td>
+              <td style="padding:7px 8px;text-align:right">$\u202f${grandTotal.toLocaleString('es-AR',{minimumFractionDigits:2})}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" data-close-modal>Cerrar</button>
+      </div>
     </div>
   </div>`;
 }
@@ -3586,10 +3671,11 @@ async function draw() {
   if (view === 'local') {
     render(vLocal());
     const localModal = {
-      localOrder:       mLocalOrder(),
-      localDispatch:    mLocalDispatch(),
-      adminLocalReview: mAdminLocalReview(),
-      localDay:         mLocalDay(),
+      localOrder:        mLocalOrder(),
+      localDispatch:     mLocalDispatch(),
+      adminLocalReview:  mAdminLocalReview(),
+      localDay:          mLocalDay(),
+      localOrderDetail:  mLocalOrderDetail(),
     }[modal] || '';
     if (localModal) app.insertAdjacentHTML('beforeend', localModal);
     bindAll();
@@ -4746,6 +4832,7 @@ function bindAll() {
   });
 
   document.getElementById('btnLocalStep4')?.addEventListener('click', () => {
+    syncLocalRolls();
     S.localOrderStep = 4; S.err = null; draw();
   });
 
@@ -4844,7 +4931,16 @@ function bindAll() {
     S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
   }));
 
+  // Open local order detail modal (🔍 button)
+  document.querySelectorAll('[data-local-detail]').forEach(btn => btn.addEventListener('click', () => {
+    const o = S.localOrders.find(x=>x.id===btn.dataset.localDetail);
+    if (!o) return;
+    S.localOrderDraft = { ...o };
+    S.modal = 'localOrderDetail'; draw();
+  }));
+
   // Admin open dispatched local order
+
   document.querySelectorAll('[data-admin-local-order]').forEach(row => row.addEventListener('click', () => {
     const o = S.localOrders.find(x=>x.id===row.dataset.adminLocalOrder);
     if (!o) return;

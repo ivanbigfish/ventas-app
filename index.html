@@ -409,6 +409,15 @@ const ACTIONS = {
 const S = {
   view: 'loading',    // loading | login | seller | admin
   tab:  'calendario', // tab activo
+  allProfiles: [],
+  meetingRequests: [],
+  meetingPending: 0,
+  meetingForm: null,
+  meetingCounterForm: null,
+  pagosTab: 'por-cliente',
+  pagosClientId: null,
+  pagosOrderId: null,
+  pagosForm: { cobPayType:'', cobAmount:'', cobTC:'' },
   user: null,
   profile: null,
   companies: [],
@@ -656,6 +665,7 @@ function nav(tabs) {
     <div class="nav-right">
       ${roleBadge}
       <span class="nav-user-name">${S.profile.name}</span>
+      <button class="btn btn-sm btn-secondary" id="btnOpenMeetings" style="position:relative">🤝${S.meetingPending>0?` <span style="background:#ef4444;color:white;border-radius:99px;padding:0 5px;font-size:10px;vertical-align:middle">${S.meetingPending}</span>`:''}</button>
       <button class="btn btn-sm btn-secondary" id="btnLogout">Salir</button>
     </div>
   </nav>`;
@@ -977,6 +987,132 @@ function vAdminLocalesSection() {
   return `<div class="subnav">${storeBtns}</div>${subNav2}${content}`;
 }
 
+// ── ADMIN PAGOS ──────────────────────────────────────────────────────────────
+function vAdminPagos() {
+  const sub  = S.pagosTab || 'por-cliente';
+  const form = S.pagosForm || {};
+  const pt   = form.cobPayType||'';
+  const amt  = form.cobAmount||'';
+  const tc   = form.cobTC||'';
+
+  // ── Por Cliente ──────────────────────────────────────────────────────────
+  if (sub==='por-cliente') {
+    const sq = (S.pagosClientSearch||'').toLowerCase().trim();
+    const clients = (S.clients||[]).filter(c=>!sq||c.name.toLowerCase().includes(sq));
+    const sel = S.pagosClientId ? (S.clients||[]).find(c=>c.id===S.pagosClientId) : null;
+    const cur = sel?.balance_currency||'USD';
+    const needsTC = sel && cur==='USD' && pt && pt!=='efectivo_usd';
+
+    const clientRows = clients.map(c=>`<tr style="cursor:pointer${S.pagosClientId===c.id?';background:var(--blue-50)':''}" data-pagos-client="${c.id}">
+      <td><strong>${c.name}</strong></td>
+      <td>${(S.sellers||[]).find(s=>s.id===c.seller_id)?.name||'—'}</td>
+      <td>${fmtBalance(c)}</td>
+    </tr>`).join('') || `<tr><td colspan="3" style="text-align:center;color:var(--gray-400);padding:16px">Sin clientes</td></tr>`;
+
+    const payForm = sel ? `
+      <div class="card mt-3" style="padding:16px">
+        <div class="card-title" style="margin-bottom:12px">💳 Registrar pago — <strong>${sel.name}</strong>
+          <span style="font-size:12px;margin-left:8px;color:var(--gray-500)">Saldo: ${fmtBalance(sel)}</span>
+        </div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+          <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Forma de pago</div>
+            <select id="fPagosPayType" style="min-width:160px">
+              <option value="">Seleccionar...</option>
+              <option value="efectivo_ars" ${pt==='efectivo_ars'?'selected':''}>Efectivo $</option>
+              <option value="efectivo_usd" ${pt==='efectivo_usd'?'selected':''}>Efectivo U$D</option>
+              <option value="transferencia" ${pt==='transferencia'?'selected':''}>Transferencia</option>
+              <option value="cheque" ${pt==='cheque'?'selected':''}>Cheque</option>
+              <option value="otro" ${pt==='otro'?'selected':''}>Otro</option>
+            </select>
+          </div>
+          <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto cobrado</div>
+            <input type="number" id="fPagosAmt" min="0" step="0.01" placeholder="0.00" value="${amt}" style="width:120px">
+          </div>
+          ${needsTC ? `<div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Tipo de cambio</div>
+            <input type="number" id="fPagosTC" min="0" step="0.01" placeholder="0.00" value="${tc}" style="width:100px">
+          </div>` : ''}
+          <div><button class="btn btn-primary" id="btnAplicarPago">✅ Aplicar pago</button></div>
+        </div>
+        <div id="pagosMsg" style="margin-top:8px;font-size:13px;color:var(--green)"></div>
+      </div>` : '';
+
+    return `<div class="subnav">
+      <button class="tab-btn active"  data-pagos-tab="por-cliente">👥 Por Cliente</button>
+      <button class="tab-btn"         data-pagos-tab="por-pedido">📋 Por Pedido</button>
+    </div>
+    <div style="padding:12px 0 0">
+      <input type="text" id="fPagosClientSearch" placeholder="🔍 Buscar cliente..." value="${S.pagosClientSearch||''}" style="max-width:280px">
+    </div>
+    <div class="table-wrap mt-2">
+      <table><thead><tr><th>Cliente</th><th>Vendedor</th><th>Saldo</th></tr></thead>
+        <tbody>${clientRows}</tbody>
+      </table>
+    </div>
+    ${payForm}`;
+  }
+
+  // ── Por Pedido ────────────────────────────────────────────────────────────
+  const oSq = (S.pagosOrderSearch||'').toLowerCase().trim();
+  const unpaid = (S.orders||[]).filter(o=>o.status==='aprobado'||o.status==='armando_remito'||o.status==='pendiente');
+  const filtered = oSq ? unpaid.filter(o=>(o.order_number||'').toLowerCase().includes(oSq)||(o.clients?.name||'').toLowerCase().includes(oSq)) : unpaid;
+  const selO = S.pagosOrderId ? (S.orders||[]).find(o=>o.id===S.pagosOrderId) : null;
+  const selC = selO ? (S.clients||[]).find(c=>c.id===selO.client_id) : null;
+  const cur2 = selC?.balance_currency||'USD';
+  const needsTC2 = selC && cur2==='USD' && pt && pt!=='efectivo_usd';
+
+  const orderRows = filtered.map(o=>{
+    const c=(S.clients||[]).find(c=>c.id===o.client_id);
+    const tot=(o.order_items||[]).reduce((s,i)=>s+parseFloat(i.price_approved||i.price||0)*parseFloat(i.quantity||0),0);
+    return `<tr style="cursor:pointer${S.pagosOrderId===o.id?';background:var(--blue-50)':''}" data-pagos-order="${o.id}">
+      <td><strong>${o.order_number||'—'}</strong></td>
+      <td>${c?.name||'—'}</td>
+      <td>${pill(o.status)}</td>
+      <td style="text-align:right">${tot>0?'$ '+tot.toLocaleString('es-AR',{minimumFractionDigits:2}):'—'}</td>
+    </tr>`;
+  }).join('') || `<tr><td colspan="4" style="text-align:center;color:var(--gray-400);padding:16px">Sin pedidos pendientes</td></tr>`;
+
+  const payForm2 = selO ? `
+    <div class="card mt-3" style="padding:16px">
+      <div class="card-title" style="margin-bottom:12px">💳 Registrar pago — Pedido <strong>${selO.order_number||'?'}</strong>
+        <span style="font-size:12px;margin-left:8px;color:var(--gray-500)">Cliente: ${selC?.name||'?'} · Saldo: ${selC?fmtBalance(selC):'—'}</span>
+      </div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Forma de pago</div>
+          <select id="fPagosPayType" style="min-width:160px">
+            <option value="">Seleccionar...</option>
+            <option value="efectivo_ars" ${pt==='efectivo_ars'?'selected':''}>Efectivo $</option>
+            <option value="efectivo_usd" ${pt==='efectivo_usd'?'selected':''}>Efectivo U$D</option>
+            <option value="transferencia" ${pt==='transferencia'?'selected':''}>Transferencia</option>
+            <option value="cheque" ${pt==='cheque'?'selected':''}>Cheque</option>
+            <option value="otro" ${pt==='otro'?'selected':''}>Otro</option>
+          </select>
+        </div>
+        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Monto cobrado</div>
+          <input type="number" id="fPagosAmt" min="0" step="0.01" placeholder="0.00" value="${amt}" style="width:120px">
+        </div>
+        ${needsTC2 ? `<div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Tipo de cambio</div>
+          <input type="number" id="fPagosTC" min="0" step="0.01" placeholder="0.00" value="${tc}" style="width:100px">
+        </div>` : ''}
+        <div><button class="btn btn-primary" id="btnAplicarPago">✅ Aplicar pago</button></div>
+      </div>
+      <div id="pagosMsg" style="margin-top:8px;font-size:13px;color:var(--green)"></div>
+    </div>` : '';
+
+  return `<div class="subnav">
+    <button class="tab-btn"       data-pagos-tab="por-cliente">👥 Por Cliente</button>
+    <button class="tab-btn active" data-pagos-tab="por-pedido">📋 Por Pedido</button>
+  </div>
+  <div style="padding:12px 0 0">
+    <input type="text" id="fPagosOrderSearch" placeholder="🔍 Buscar N° o cliente..." value="${S.pagosOrderSearch||''}" style="max-width:280px">
+  </div>
+  <div class="table-wrap mt-2">
+    <table><thead><tr><th>N° Pedido</th><th>Cliente</th><th>Estado</th><th style="text-align:right">Total</th></tr></thead>
+      <tbody>${orderRows}</tbody>
+    </table>
+  </div>
+  ${payForm2}`;
+}
+
 function vAdminClientes() {
   const visibleSellers = isOwner() && S.filterCompany !== 'all'
     ? S.sellers.filter(s => s.company_id === S.filterCompany)
@@ -1238,7 +1374,7 @@ function mAddAction() {
     } else {
       // Otros tipos (cobranza, visita, llamado, etc.)
       let cobranzaForm = '';
-      if (d.type==='cobranza') {
+      if (d.type==='cobranza' && isAdmin()) {
         const pt = d.cobPayType||'';
         const needsTC = clientCur==='USD' && pt && pt!=='efectivo_usd';
         cobranzaForm = `
@@ -1769,6 +1905,78 @@ async function dbClientMovements(clientId) {
       .order('delivered_at', { ascending: true }),
   ]);
   S.clientMovements = { collections: colls || [], remitos: remits || [] };
+}
+
+// ============================================================
+// DB: PROFILES (for meetings)
+// ============================================================
+async function dbProfiles() {
+  const { data } = await sb.from('profiles').select('id,name,role').neq('id',S.profile.id).order('name');
+  S.allProfiles = data || [];
+}
+// ============================================================
+// DB: MEETING REQUESTS
+// ============================================================
+async function dbMeetingRequests() {
+  const { data } = await sb.from('meeting_requests')
+    .select('*, from_profile:from_user_id(id,name), to_profile:to_user_id(id,name)')
+    .or(`from_user_id.eq.${S.profile.id},to_user_id.eq.${S.profile.id}`)
+    .order('created_at',{ascending:false});
+  S.meetingRequests = data || [];
+  // Count items needing MY attention:
+  // - requests sent TO me that are 'pending'
+  // - counter-proposals sent TO me (status='counter', from_user_id = other)
+  S.meetingPending = S.meetingRequests.filter(r=>
+    (r.to_user_id===S.profile.id && r.status==='pending') ||
+    (r.from_user_id===S.profile.id && r.status==='counter')
+  ).length;
+}
+async function dbCreateMeeting(d) {
+  const { error } = await sb.from('meeting_requests').insert({
+    from_user_id: S.profile.id,
+    to_user_id:   d.toUserId,
+    proposed_date: d.date,
+    proposed_time: d.time || null,
+    note:          d.note || null,
+    status:        'pending',
+  });
+  if (error) return error.message;
+  // Also add to requester's calendar
+  await dbAddAction({ type:'reunion', clientId:null, clientName:'', date:d.date, note:`Reunión solicitada con ${d.toName}${d.note?': '+d.note:''}`, time:d.time||null });
+  return null;
+}
+async function dbRespondMeeting(id, action, counterData) {
+  if (action==='accept') {
+    const { error } = await sb.from('meeting_requests').update({status:'accepted'}).eq('id',id);
+    if (error) return error.message;
+    // Add to my calendar
+    const req = S.meetingRequests.find(r=>r.id===id);
+    if (req) {
+      await dbAddAction({ type:'reunion', clientId:null, clientName:'', date:req.proposed_date,
+        note:`Reunión confirmada con ${req.from_profile?.name||'?'}${req.note?': '+req.note:''}`,
+        time:req.proposed_time||null });
+    }
+  } else if (action==='reject') {
+    const { error } = await sb.from('meeting_requests').update({status:'rejected'}).eq('id',id);
+    if (error) return error.message;
+  } else if (action==='counter') {
+    const { error } = await sb.from('meeting_requests').update({
+      status:'counter', counter_date:counterData.date,
+      counter_time:counterData.time||null, counter_note:counterData.note||null,
+    }).eq('id',id);
+    if (error) return error.message;
+  } else if (action==='accept-counter') {
+    const req = S.meetingRequests.find(r=>r.id===id);
+    const { error } = await sb.from('meeting_requests').update({status:'accepted'}).eq('id',id);
+    if (error) return error.message;
+    if (req) {
+      await dbAddAction({ type:'reunion', clientId:null, clientName:'', date:req.counter_date||req.proposed_date,
+        note:`Reunión confirmada con ${req.to_profile?.name||'?'}${req.counter_note?': '+req.counter_note:''}`,
+        time:req.counter_time||null });
+    }
+  }
+  await dbMeetingRequests();
+  return null;
 }
 
 // ============================================================
@@ -3020,6 +3228,7 @@ function vLocal() {
       <div style="font-weight:700;font-size:16px;color:var(--blue)">🏪 ${myLocal?.name||'Local'}</div>
     </div>
     <div class="top-bar-right">
+      <button class="btn btn-sm btn-secondary" id="btnOpenMeetings" style="position:relative">🤝${S.meetingPending>0?` <span style="background:#ef4444;color:white;border-radius:99px;padding:0 5px;font-size:10px;vertical-align:middle">${S.meetingPending}</span>`:''}</button>
       <button class="btn btn-sm btn-secondary" id="btnLogout">Salir</button>
     </div>
   </div>
@@ -3114,16 +3323,6 @@ function vLocalClientes() {
 }
 
 // ── ACTIVOS TAB ───────────────────────────────────────────────────────────────
-
-// ── SORT HEADER HELPER ───────────────────────────────────────────────────────
-function thSort(label, col, sort, sortId, align) {
-  const active  = sort.col === col;
-  const arrow   = active ? (sort.dir==='asc' ? ' ↑' : ' ↓') : '';
-  const nextDir = active ? (sort.dir==='asc' ? 'desc' : 'asc') : 'desc';
-  const sk      = sortId==='activos-sort' ? 'localActivosSort' : 'localDispSort';
-  const style   = 'cursor:pointer;user-select:none;white-space:nowrap;' + (align==='right' ? 'text-align:right' : '');
-  return `<th style="${style}" onclick="S.${sk}={col:'${col}',dir:'${nextDir}'};draw()">${label}${arrow}</th>`;
-}
 
 // ── LOCAL LIST HELPERS ────────────────────────────────────────────────────────
 function calcOrderTotal(o) {
@@ -3340,12 +3539,12 @@ function vLocalActivos() {
     <div class="table-wrap">
       <table>
         <thead><tr>
-          ${thSort('Fecha','fecha',sort,'activos-sort')}
+          <th style="cursor:pointer;white-space:nowrap" onclick="S.localActivosSort={col:'fecha',dir:(S.localActivosSort?.col==='fecha'&&S.localActivosSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='fecha'?(sort.dir==='asc'?'Fecha ↑':'Fecha ↓'):'Fecha'}</th>
           <th>N°</th>
-          ${thSort('Cliente','cliente',sort,'activos-sort')}
+          <th style="cursor:pointer" onclick="S.localActivosSort={col:'cliente',dir:(S.localActivosSort?.col==='cliente'&&S.localActivosSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='cliente'?(sort.dir==='asc'?'Cliente ↑':'Cliente ↓'):'Cliente'}</th>
           <th>Tipo</th>
           <th>Estado</th>
-          ${thSort('Total','monto',sort,'activos-sort','right')}
+          <th style="cursor:pointer;text-align:right" onclick="S.localActivosSort={col:'monto',dir:(S.localActivosSort?.col==='monto'&&S.localActivosSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='monto'?(sort.dir==='asc'?'Total ↑':'Total ↓'):'Total'}</th>
           <th></th>
         </tr></thead>
         <tbody>${rows}</tbody>
@@ -3442,6 +3641,135 @@ function mLocalOrderDetail() {
   </div>`;
 }
 
+// ── MEETINGS MODAL ───────────────────────────────────────────────────────────
+function mMeetings() {
+  if (S.modal !== 'meetings') return '';
+  const all   = S.meetingRequests || [];
+  const sub   = S.meetingsSubTab || 'recibidas';
+  const form  = S.meetingForm;
+  const cf    = S.meetingCounterForm;
+
+  // ── RECIBIDAS ────────────────────────────────────────────────────────────
+  const received = all.filter(r => r.to_user_id === S.profile.id && (r.status==='pending'||r.status==='accepted'||r.status==='rejected'));
+  const recRows = received.length===0
+    ? `<div class="empty-state" style="padding:24px"><div class="empty-icon">📭</div>Sin reuniones recibidas</div>`
+    : received.map(r=>{
+        const statusColor = r.status==='accepted'?'#22c55e':r.status==='rejected'?'#ef4444':'#f59e0b';
+        const statusLbl   = r.status==='accepted'?'Confirmada':r.status==='rejected'?'Rechazada':'Pendiente';
+        const actions = r.status==='pending' ? `
+          <div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-sm btn-primary"   data-meet-accept="${r.id}">✅ Aceptar</button>
+            <button class="btn btn-sm btn-secondary" data-meet-reject="${r.id}">❌ Rechazar</button>
+            <button class="btn btn-sm btn-secondary" data-meet-counter="${r.id}">📅 Proponer otra fecha</button>
+          </div>
+          ${cf && cf.id===r.id ? `<div style="margin-top:8px;background:var(--gray-50);padding:10px;border-radius:8px">
+            <div style="font-size:12px;font-weight:600;margin-bottom:6px">Nueva propuesta:</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap">
+              <input type="date" id="fCounterDate" value="${cf.date||''}" style="width:150px">
+              <input type="time" id="fCounterTime" value="${cf.time||''}" style="width:120px">
+              <input type="text" id="fCounterNote" placeholder="Nota (opcional)" value="${cf.note||''}" style="flex:1;min-width:140px">
+              <button class="btn btn-sm btn-primary" data-meet-send-counter="${r.id}">Enviar</button>
+            </div>
+          </div>` : ''}` : '';
+        return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              <strong>${r.from_profile?.name||'?'}</strong>
+              <span style="margin-left:8px;font-size:12px;color:var(--gray-500)">solicita reunión</span>
+            </div>
+            <span style="background:${statusColor};color:white;border-radius:99px;padding:2px 8px;font-size:11px">${statusLbl}</span>
+          </div>
+          <div style="margin-top:4px;font-size:13px">📅 ${r.proposed_date}${r.proposed_time?' · ⏰ '+r.proposed_time:''}</div>
+          ${r.note?`<div style="font-size:12px;color:var(--gray-600);margin-top:2px">📝 ${r.note}</div>`:''}
+          ${actions}
+        </div>`;
+      }).join('');
+
+  // ── ENVIADAS ──────────────────────────────────────────────────────────────
+  const sent = all.filter(r => r.from_user_id === S.profile.id);
+  const sentRows = sent.length===0
+    ? `<div class="empty-state" style="padding:24px"><div class="empty-icon">📤</div>Sin solicitudes enviadas</div>`
+    : sent.map(r=>{
+        const statusColor = r.status==='accepted'?'#22c55e':r.status==='rejected'?'#ef4444':r.status==='counter'?'#3b82f6':'#f59e0b';
+        const statusLbl   = {pending:'Pendiente',accepted:'Confirmada',rejected:'Rechazada',counter:'Contrapropuesta'}[r.status]||r.status;
+        const counterSection = r.status==='counter' ? `
+          <div style="margin-top:6px;background:#eff6ff;padding:8px;border-radius:6px;font-size:12px">
+            <strong>Propuesta:</strong> ${r.counter_date}${r.counter_time?' · '+r.counter_time:''}
+            ${r.counter_note?`<br>📝 ${r.counter_note}`:''}
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button class="btn btn-sm btn-primary"   data-meet-accept-counter="${r.id}">✅ Aceptar</button>
+              <button class="btn btn-sm btn-secondary" data-meet-reject="${r.id}">❌ Rechazar</button>
+            </div>
+          </div>` : '';
+        return `<div style="border:1px solid var(--gray-200);border-radius:8px;padding:12px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;align-items:flex-start">
+            <div>
+              Para: <strong>${r.to_profile?.name||'?'}</strong>
+            </div>
+            <span style="background:${statusColor};color:white;border-radius:99px;padding:2px 8px;font-size:11px">${statusLbl}</span>
+          </div>
+          <div style="margin-top:4px;font-size:13px">📅 ${r.proposed_date}${r.proposed_time?' · ⏰ '+r.proposed_time:''}</div>
+          ${r.note?`<div style="font-size:12px;color:var(--gray-600);margin-top:2px">📝 ${r.note}</div>`:''}
+          ${counterSection}
+        </div>`;
+      }).join('');
+
+  // ── NUEVA SOLICITUD ───────────────────────────────────────────────────────
+  const profiles = S.allProfiles || [];
+  const newForm = form ? `
+    <div style="border:1px solid var(--blue);border-radius:8px;padding:16px;margin-top:4px">
+      <div style="font-weight:600;margin-bottom:10px">📅 Nueva solicitud de reunión</div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Para</div>
+          <select id="fMeetTo" style="min-width:180px">
+            <option value="">Seleccionar usuario...</option>
+            ${profiles.map(p=>`<option value="${p.id}" ${form.toUserId===p.id?'selected':''}>${p.name}</option>`).join('')}
+          </select>
+        </div>
+        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha</div>
+          <input type="date" id="fMeetDate" value="${form.date||''}" style="width:150px">
+        </div>
+        <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Hora (opcional)</div>
+          <input type="time" id="fMeetTime" value="${form.time||''}" style="width:120px">
+        </div>
+        <div style="flex:1;min-width:180px"><div style="font-size:11px;font-weight:600;margin-bottom:4px">Nota</div>
+          <input type="text" id="fMeetNote" placeholder="Motivo, lugar..." value="${form.note||''}" style="width:100%">
+        </div>
+      </div>
+      <div style="margin-top:10px;display:flex;gap:8px">
+        <button class="btn btn-primary" id="btnSendMeeting">📤 Enviar solicitud</button>
+        <button class="btn btn-secondary" id="btnCancelMeetForm">Cancelar</button>
+      </div>
+      <div id="meetingsMsg" style="margin-top:6px;font-size:13px;color:var(--red)"></div>
+    </div>` : `<button class="btn btn-primary btn-sm mt-2" id="btnNewMeetForm">+ Nueva solicitud</button>`;
+
+  const pendRecBadge = received.filter(r=>r.status==='pending').length;
+  const pendSentBadge= sent.filter(r=>r.status==='counter').length;
+
+  return `<div class="modal-overlay" id="overlay">
+    <div class="modal" style="max-width:560px;width:95vw">
+      <div class="modal-header">
+        <h3 style="margin:0">🤝 Reuniones</h3>
+        <button class="modal-close" data-close>✕</button>
+      </div>
+      <div class="modal-body" style="padding:12px 16px">
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <button class="btn btn-sm ${sub==='recibidas'?'btn-primary':'btn-secondary'}" data-meet-sub="recibidas">
+            📥 Recibidas${pendRecBadge>0?` <span style="background:#ef4444;color:white;border-radius:99px;padding:0 5px;font-size:10px">${pendRecBadge}</span>`:''}
+          </button>
+          <button class="btn btn-sm ${sub==='enviadas'?'btn-primary':'btn-secondary'}" data-meet-sub="enviadas">
+            📤 Enviadas${pendSentBadge>0?` <span style="background:#3b82f6;color:white;border-radius:99px;padding:0 5px;font-size:10px">${pendSentBadge}</span>`:''}
+          </button>
+        </div>
+        <div style="max-height:340px;overflow-y:auto;padding-right:4px">
+          ${sub==='recibidas' ? recRows : sentRows}
+        </div>
+        ${newForm}
+      </div>
+    </div>
+  </div>`;
+}
+
 // ── DESPACHADOS TAB ───────────────────────────────────────────────────────────
 function vLocalDespachados() {
   const filter  = S.localDispFilter || 'revisar';
@@ -3527,12 +3855,12 @@ function vLocalDespachados() {
     <div class="table-wrap">
       <table>
         <thead><tr>
-          ${thSort('Fecha','fecha',sort,'disp-sort')}
+          <th style="cursor:pointer;white-space:nowrap" onclick="S.localDispSort={col:'fecha',dir:(S.localDispSort?.col==='fecha'&&S.localDispSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='fecha'?(sort.dir==='asc'?'Fecha ↑':'Fecha ↓'):'Fecha'}</th>
           <th>N°</th>
-          ${thSort('Cliente','cliente',sort,'disp-sort')}
+          <th style="cursor:pointer" onclick="S.localDispSort={col:'cliente',dir:(S.localDispSort?.col==='cliente'&&S.localDispSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='cliente'?(sort.dir==='asc'?'Cliente ↑':'Cliente ↓'):'Cliente'}</th>
           <th>Tipo</th>
           <th>Estado</th>
-          ${thSort('Total','monto',sort,'disp-sort','right')}
+          <th style="cursor:pointer;text-align:right" onclick="S.localDispSort={col:'monto',dir:(S.localDispSort?.col==='monto'&&S.localDispSort?.dir==='desc'?'asc':'desc')};draw()">${sort.col==='monto'?(sort.dir==='asc'?'Total ↑':'Total ↓'):'Total'}</th>
           <th></th>
           <th></th>
         </tr></thead>
@@ -3989,6 +4317,7 @@ async function draw() {
       adminLocalReview:  mAdminLocalReview(),
       localDay:          mLocalDay(),
       localOrderDetail:  mLocalOrderDetail(),
+      meetings:          mMeetings(),
     }[modal] || '';
     if (localModal) app.insertAdjacentHTML('beforeend', localModal);
     bindAll();
@@ -4018,6 +4347,7 @@ async function draw() {
         { id:'vendedores',  icon:'👤', label:'Vendedores',  badge: S.pendingCount||null },
         { id:'clientes',    icon:'👥', label:'Clientes'     },
         { id:'locales',     icon:'🏪', label:'Locales'      },
+        { id:'pagos',       icon:'💰', label:'Pagos'        },
         { id:'reportes',    icon:'📊', label:'Reportes'     },
         { id:'stock',       icon:'🧵', label:'Stock'        },
         { id:'micalendario',icon:'📅', label:'Mi Calendario'},
@@ -4028,6 +4358,7 @@ async function draw() {
         { id:'acciones',    icon:'✅', label:'Acciones'    },
         { id:'vendedores',  icon:'👤', label:'Vendedores'  },
         { id:'clientes',    icon:'👥', label:'Clientes'     },
+        { id:'pagos',       icon:'💰', label:'Pagos'        },
         { id:'reportes',    icon:'📊', label:'Reportes'     },
         { id:'micalendario',icon:'📅', label:'Mi Calendario'},
         { id:'micartera',   icon:'🗂',  label:'Mi Cartera'  },
@@ -4041,6 +4372,7 @@ async function draw() {
       case 'stock':        content = isBulltex() ? vStock()   : ''; break;
       case 'pedidos':      content = isBulltex() ? vPedidos() : ''; break;
       case 'remitos':      content = isBulltex() ? vRemitos() : ''; break;
+      case 'pagos':        content = vAdminPagos(); break;
       case 'micalendario': content = vCalendar(); break;
       case 'micartera':    content = vMyClients(); break;
       default:             content = vAdminAcciones(); break;
@@ -4073,6 +4405,7 @@ async function draw() {
     localDispatch:     mLocalDispatch(),
     adminLocalReview:  mAdminLocalReview(),
     localOrderDetail:  mLocalOrderDetail(),
+    meetings:          mMeetings(),
   }[modal] || '';
   if (modalHtml) app.insertAdjacentHTML('beforeend', modalHtml);
 
@@ -4094,6 +4427,7 @@ function bindAll() {
     if (S.tab==='vendedores')   { await dbSellers(); await dbClients('all'); await dbCompanies(); }
     if (S.tab==='micalendario') { await dbClients(S.profile.id); await dbActions(S.year, S.month); }
     if (S.tab==='micartera')    { await dbClients(S.profile.id); }
+    if (S.tab==='pagos')        { await dbClients('all'); await dbOrders(); }
     if (S.tab==='stock'   && isBulltex()) await dbProducts();
     if (S.tab==='pedidos' && isBulltex()) { await dbOrders(); if (S.profile.role==='seller') await dbProducts(); }
     if (S.tab==='remitos' && isBulltex()) { await Promise.all([dbOrders(), dbRemitos()]); }
@@ -4130,6 +4464,106 @@ function bindAll() {
   });
 
   // LOGOUT
+
+  // ── MEETINGS ────────────────────────────────────────────────────────────────
+  document.getElementById('btnOpenMeetings')?.addEventListener('click', async () => {
+    if (!S.allProfiles?.length) await dbProfiles();
+    await dbMeetingRequests();
+    S.meetingsSubTab = 'recibidas';
+    S.meetingForm = null;
+    S.meetingCounterForm = null;
+    openModal('meetings');
+  });
+  document.querySelectorAll('[data-meet-sub]').forEach(b=>b.addEventListener('click',()=>{
+    S.meetingsSubTab = b.dataset.meetSub; draw();
+  }));
+  document.getElementById('btnNewMeetForm')?.addEventListener('click',()=>{
+    S.meetingForm = { toUserId:'', date:'', time:'', note:'' }; draw();
+  });
+  document.getElementById('btnCancelMeetForm')?.addEventListener('click',()=>{
+    S.meetingForm = null; draw();
+  });
+  document.getElementById('btnSendMeeting')?.addEventListener('click', async ()=>{
+    const toId   = document.getElementById('fMeetTo')?.value;
+    const date   = document.getElementById('fMeetDate')?.value;
+    const time   = document.getElementById('fMeetTime')?.value;
+    const note   = document.getElementById('fMeetNote')?.value?.trim();
+    const toName = (S.allProfiles||[]).find(p=>p.id===toId)?.name||'?';
+    const msg    = document.getElementById('meetingsMsg');
+    if (!toId) { if(msg) msg.textContent='Seleccioná un usuario'; return; }
+    if (!date) { if(msg) msg.textContent='Seleccioná una fecha'; return; }
+    const err = await dbCreateMeeting({toUserId:toId, date, time, note, toName});
+    if (err) { if(msg) msg.style.color='var(--red)'; if(msg) msg.textContent=err; return; }
+    S.meetingForm = null;
+    await dbMeetingRequests();
+    draw();
+  });
+  document.querySelectorAll('[data-meet-accept]').forEach(b=>b.addEventListener('click', async ()=>{
+    await dbRespondMeeting(b.dataset.meetAccept,'accept',{}); draw();
+  }));
+  document.querySelectorAll('[data-meet-reject]').forEach(b=>b.addEventListener('click', async ()=>{
+    await dbRespondMeeting(b.dataset.meetReject,'reject',{}); draw();
+  }));
+  document.querySelectorAll('[data-meet-counter]').forEach(b=>b.addEventListener('click',()=>{
+    S.meetingCounterForm = { id:b.dataset.meetCounter, date:'', time:'', note:'' }; draw();
+  }));
+  document.querySelectorAll('[data-meet-send-counter]').forEach(b=>b.addEventListener('click', async ()=>{
+    const date = document.getElementById('fCounterDate')?.value;
+    const time = document.getElementById('fCounterTime')?.value;
+    const note = document.getElementById('fCounterNote')?.value?.trim();
+    if (!date) return;
+    await dbRespondMeeting(b.dataset.meetSendCounter,'counter',{date,time,note});
+    S.meetingCounterForm = null; draw();
+  }));
+  document.querySelectorAll('[data-meet-accept-counter]').forEach(b=>b.addEventListener('click', async ()=>{
+    await dbRespondMeeting(b.dataset.meetAcceptCounter,'accept-counter',{}); draw();
+  }));
+
+  // ── PAGOS ─────────────────────────────────────────────────────────────────
+  document.querySelectorAll('[data-pagos-tab]').forEach(b=>b.addEventListener('click',()=>{
+    S.pagosTab=b.dataset.pagosTab; S.pagosClientId=null; S.pagosOrderId=null;
+    S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
+  }));
+  document.querySelectorAll('[data-pagos-client]').forEach(b=>b.addEventListener('click',()=>{
+    S.pagosClientId=b.dataset.pagosClient; S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
+  }));
+  document.querySelectorAll('[data-pagos-order]').forEach(b=>b.addEventListener('click',()=>{
+    S.pagosOrderId=b.dataset.pagosOrder; S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''}; draw();
+  }));
+  document.getElementById('fPagosClientSearch')?.addEventListener('input',e=>{S.pagosClientSearch=e.target.value;draw();});
+  document.getElementById('fPagosOrderSearch')?.addEventListener('input',e=>{S.pagosOrderSearch=e.target.value;draw();});
+  document.getElementById('fPagosPayType')?.addEventListener('change',e=>{
+    if(!S.pagosForm)S.pagosForm={};
+    S.pagosForm.cobPayType=e.target.value; S.pagosForm.cobAmount=document.getElementById('fPagosAmt')?.value||'';
+    S.pagosForm.cobTC=document.getElementById('fPagosTC')?.value||''; draw();
+  });
+  document.getElementById('btnAplicarPago')?.addEventListener('click', async ()=>{
+    const pt  = document.getElementById('fPagosPayType')?.value;
+    const amt = parseFloat(document.getElementById('fPagosAmt')?.value||'0');
+    const tc  = parseFloat(document.getElementById('fPagosTC')?.value||'0');
+    const msg = document.getElementById('pagosMsg');
+    if (!pt)  { if(msg){msg.style.color='var(--red)';msg.textContent='Seleccioná la forma de pago';} return; }
+    if (!amt) { if(msg){msg.style.color='var(--red)';msg.textContent='Ingresá el monto';} return; }
+    let clientId = S.pagosClientId;
+    if (!clientId && S.pagosOrderId) {
+      const o = (S.orders||[]).find(o=>o.id===S.pagosOrderId);
+      clientId = o?.client_id;
+    }
+    if (!clientId) { if(msg){msg.style.color='var(--red)';msg.textContent='Seleccioná un cliente u pedido';} return; }
+    const client  = (S.clients||[]).find(c=>c.id===clientId);
+    const cur     = client?.balance_currency||'USD';
+    const needsTC = cur==='USD' && pt!=='efectivo_usd';
+    if (needsTC && !tc) { if(msg){msg.style.color='var(--red)';msg.textContent='Ingresá el tipo de cambio';} return; }
+    const paymentCurrency = pt==='efectivo_usd' ? 'USD' : 'ARS';
+    const amountAccount   = needsTC ? amt/tc : amt;
+    const err = await dbAddCollection({clientId, paymentType:pt, amount:amt, paymentCurrency,
+      exchangeRate:needsTC?tc:null, amountAccount, date:new Date().toISOString().slice(0,10), notes:null});
+    if (err) { if(msg){msg.style.color='var(--red)';msg.textContent=err;} return; }
+    await dbClients('all');
+    S.pagosClientId=null; S.pagosOrderId=null; S.pagosForm={cobPayType:'',cobAmount:'',cobTC:''};
+    if(msg){msg.style.color='var(--green)';msg.textContent='Pago aplicado';}
+    setTimeout(()=>draw(), 1200);
+  });
 
   document.getElementById('btnLogout')?.addEventListener('click', async () => {
     await sb.auth.signOut();
@@ -4265,7 +4699,7 @@ function bindAll() {
     }
 
     // COBRANZA: validate and save collection
-    if (S.addData.type === 'cobranza') {
+    if (S.addData.type === 'cobranza' && isAdmin()) {
       const pt  = document.getElementById('fCobPayType')?.value;
       const amt = parseFloat(document.getElementById('fCobAmount')?.value||'0');
       const tc  = parseFloat(document.getElementById('fCobTC')?.value||'0');
@@ -5446,6 +5880,7 @@ async function boot() {
     S.tab = 'acciones';
     S.view = 'admin';
     if (isBulltex()) await Promise.all([dbProducts(), dbOrders(), dbRemitos(), dbLocals(), dbLocalOrders(null), dbLocalPriceLists()]);
+    await Promise.all([dbProfiles(), dbMeetingRequests()]);
   } else if (profile.role === 'local') {
     S.localTab = 'calendario';
     S.localCalYear = new Date().getFullYear();
@@ -5453,10 +5888,12 @@ async function boot() {
     S.localDispFilter = 'revisar';
     S.view = 'local';
     await Promise.all([dbLocals(), dbLocalOrders(profile.local_id), dbLocalClients(profile.local_id), dbLocalPriceLists(), dbProducts()]);
+    await Promise.all([dbProfiles(), dbMeetingRequests()]);
   } else {
     S.tab = 'calendario';
     S.view = 'seller';
     if (isBulltex()) await Promise.all([dbProducts(), dbOrders(), dbRemitos(profile.id)]);
+    await Promise.all([dbProfiles(), dbMeetingRequests()]);
   }
 
   draw();

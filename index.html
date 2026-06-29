@@ -1810,11 +1810,46 @@ async function dbSaveLocalOrderItems(orderId, items) {
   return null;
 }
 
+async function dbAdjustLocalOrderStock(orderId, direction) {
+  // direction: -1 = deduct (venta/reserva dispatch), +1 = add (devolucion returned)
+  const order = S.localOrders.find(o => o.id === orderId);
+  if (!order) return;
+  const grouped = {};
+  for (const item of (order.local_order_items || [])) {
+    const pcId = item.product_color_id;
+    const kg = (item.local_order_rolls || []).reduce((s, r) => s + parseFloat(r.quantity || 0), 0);
+    grouped[pcId] = (grouped[pcId] || 0) + kg;
+  }
+  for (const [pcId, kg] of Object.entries(grouped)) {
+    const { data: pc } = await sb.from('product_colors').select('total_stock').eq('id', pcId).single();
+    if (pc) {
+      const newStock = Math.max(0, (pc.total_stock || 0) + direction * kg);
+      await sb.from('product_colors').update({ total_stock: newStock, updated_at: new Date().toISOString() }).eq('id', pcId);
+    }
+  }
+  await dbProducts();
+}
+
+async function dbReturnLocalOrder(orderId) {
+  const { error } = await sb.from('local_orders').update({
+    status: 'devuelto', dispatched_at: new Date().toISOString(),
+  }).eq('id', orderId);
+  if (error) return error.message;
+  await dbAdjustLocalOrderStock(orderId, +1);
+  return null;
+}
+
 async function dbDispatchLocalOrder(orderId, dispatchType) {
+  const order = S.localOrders.find(o => o.id === orderId);
   const { error } = await sb.from('local_orders').update({
     status: 'despachado', dispatch_type: dispatchType, dispatched_at: new Date().toISOString(),
   }).eq('id', orderId);
-  return error?.message || null;
+  if (error) return error.message;
+  // Deduct stock for venta/reserva; devolución adds stock when "devuelto" is clicked
+  if (order && (order.move_type === 'venta' || order.move_type === 'reserva')) {
+    await dbAdjustLocalOrderStock(orderId, -1);
+  }
+  return null;
 }
 
 async function dbReviewLocalOrder(orderId) {
@@ -3056,7 +3091,7 @@ function vLocalActivos() {
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th></tr></thead>
+        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -3080,6 +3115,9 @@ function vLocalDespachados() {
           const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
           return s + kg*(parseFloat(i.price||0));
         },0);
+        const devueltoBtn = (o.move_type === 'devolucion' && o.status === 'despachado')
+          ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" style="padding:2px 8px;font-size:11px" onclick="event.stopPropagation()">✅ Devuelto</button>`
+          : '';
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
           <td><strong>${o.order_number||'—'}</strong></td>
           <td>${o.clients?.name||'—'}</td>
@@ -3087,6 +3125,7 @@ function vLocalDespachados() {
           <td>${pill(o.status)}</td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
           <td style="font-size:11px;color:var(--gray-400)">${(o.dispatched_at||o.created_at||'').slice(0,10)}</td>
+          <td>${devueltoBtn}</td>
         </tr>`;
       }).join('');
   return `
@@ -4771,6 +4810,18 @@ function bindAll() {
   }
   document.getElementById('btnDispatchEntregado')?.addEventListener('click', () => doDispatch('entregado'));
   document.getElementById('btnDispatchRetirado')?.addEventListener('click', () => doDispatch('retirado'));
+
+  // Devolver devolución → suma stock
+  document.querySelectorAll('[data-devolver]').forEach(btn => btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const orderId = btn.dataset.devolver;
+    S.loading = true; draw();
+    const err = await dbReturnLocalOrder(orderId);
+    S.loading = false;
+    if (err) { S.err = err; draw(); return; }
+    await dbLocalOrders(isAdmin() ? null : S.profile.local_id);
+    draw();
+  }));
 
   // Open local order (click row)
   document.querySelectorAll('[data-local-order]').forEach(row => row.addEventListener('click', () => {

@@ -1911,8 +1911,26 @@ async function dbClientMovements(clientId) {
 // DB: PROFILES (for meetings)
 // ============================================================
 async function dbProfiles() {
-  const { data } = await sb.from('profiles').select('id,name,role').neq('id',S.profile.id).order('name');
+  const { data } = await sb.from('profiles').select('id,name,role,company_id').neq('id',S.profile.id).order('name');
   S.allProfiles = data || [];
+}
+// Returns the subset of profiles the current user is allowed to invite to a meeting
+function meetingTargets(all) {
+  const myRole    = S.profile.role;
+  const myCompany = companyName(S.profile.company_id);
+  const co        = p => companyName(p.company_id);
+  if (myRole === 'owner') return all;
+  if (myRole === 'seller' && myCompany === 'Bulltex')
+    return all.filter(p => p.role==='owner' || (p.role==='admin' && co(p)==='Bulltex'));
+  if (myRole === 'admin'  && myCompany === 'Bulltex')
+    return all.filter(p => p.role==='owner' || (p.role==='seller' && co(p)==='Bulltex') || p.role==='local');
+  if (myRole === 'seller' && myCompany !== 'Bulltex')
+    return all.filter(p => p.role==='owner' || ((p.role==='admin'||p.role==='seller') && co(p)===myCompany));
+  if (myRole === 'admin'  && myCompany !== 'Bulltex')
+    return all.filter(p => p.role==='owner' || (p.role==='seller' && co(p)===myCompany));
+  if (myRole === 'local')
+    return all.filter(p => p.role==='owner' || ((p.role==='admin'||p.role==='seller') && co(p)!=='Bulltex'));
+  return all;
 }
 // ============================================================
 // DB: MEETING REQUESTS
@@ -3715,7 +3733,7 @@ function mMeetings() {
       }).join('');
 
   // ── NUEVA SOLICITUD ───────────────────────────────────────────────────────
-  const profiles = S.allProfiles || [];
+  const profiles = meetingTargets(S.allProfiles || []);
   const newForm = form ? `
     <div style="border:1px solid var(--blue);border-radius:8px;padding:16px;margin-top:4px">
       <div style="font-weight:600;margin-bottom:10px">📅 Nueva solicitud de reunión</div>
@@ -3723,7 +3741,7 @@ function mMeetings() {
         <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Para</div>
           <select id="fMeetTo" style="min-width:180px">
             <option value="">Seleccionar usuario...</option>
-            ${profiles.map(p=>`<option value="${p.id}" ${form.toUserId===p.id?'selected':''}>${p.name}</option>`).join('')}
+            ${profiles.map(p=>`<option value="${p.id}" ${form.toUserId===p.id?'selected':''}>${p.role==='owner'?'ivan':p.name}</option>`).join('')}
           </select>
         </div>
         <div><div style="font-size:11px;font-weight:600;margin-bottom:4px">Fecha</div>

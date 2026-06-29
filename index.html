@@ -2950,6 +2950,8 @@ function vLocal() {
   if (S.localCalYear === undefined) S.localCalYear = new Date().getFullYear();
   if (S.localCalMonth === undefined) S.localCalMonth = new Date().getMonth();
   if (S.localDispFilter === undefined) S.localDispFilter = 'revisar';
+  if (S.localActivosSort === undefined) S.localActivosSort = {col:'fecha', dir:'desc'};
+  if (S.localDispSort    === undefined) S.localDispSort    = {col:'fecha', dir:'desc'};
   const tab = S.localTab;
   const tabHtml = tabs.map(t => `<button class="tab-btn${tab===t.id?' active':''}" data-local-tab="${t.id}">${t.icon} ${t.label}</button>`).join('');
   let content = '';
@@ -3058,19 +3060,76 @@ function vLocalClientes() {
 }
 
 // ── ACTIVOS TAB ───────────────────────────────────────────────────────────────
+
+// ── LOCAL LIST HELPERS ────────────────────────────────────────────────────────
+function calcOrderTotal(o) {
+  return (o.local_order_items||[]).reduce((s,i)=>{
+    const kg=(i.local_order_rolls||[]).reduce((ss,r)=>ss+parseFloat(r.quantity||0),0);
+    return s+kg*parseFloat(i.price||0);
+  },0);
+}
+function sortLocalList(list, sort) {
+  return [...list].sort((a,b)=>{
+    let va, vb;
+    if (sort.col==='fecha')   { va=a.order_date||a.created_at||''; vb=b.order_date||b.created_at||''; }
+    else if (sort.col==='cliente') { va=(a.clients?.name||'').toLowerCase(); vb=(b.clients?.name||'').toLowerCase(); }
+    else if (sort.col==='monto')   { va=calcOrderTotal(a); vb=calcOrderTotal(b); }
+    else { va=''; vb=''; }
+    if (va<vb) return sort.dir==='asc'?-1:1;
+    if (va>vb) return sort.dir==='asc'?1:-1;
+    return 0;
+  });
+}
+function thSort(label, col, sort, dataAttr, align) {
+  const active = sort.col===col;
+  const icon = active ? (sort.dir==='asc'?'▲':'▼') : '⇅';
+  const as = align ? ';text-align:'+align : '';
+  return '<th style="cursor:pointer;user-select:none;white-space:nowrap'+as+'" data-'+dataAttr+'="'+col+'">'+label+' <span style="font-size:10px;opacity:'+(active?1:0.3)+'">'+icon+'</span></th>';
+}
+function downloadCSV(filename, headers, rows) {
+  const bom = '﻿';
+  const esc = v => '"'+String(v==null?'':v).replace(/"/g,'""')+'"';
+  const csv = bom + [headers,...rows].map(r=>r.map(esc).join(',')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  a.download = filename; a.click();
+}
+function printLocalTable(title, headers, rows) {
+  const th = headers.map(h=>'<th style="background:#1e40af;color:white;padding:6px 8px;text-align:left">'+h+'</th>').join('');
+  const tr = rows.map(r=>'<tr>'+r.map((c,i)=>'<td style="padding:5px 8px;border-bottom:1px solid #e5e7eb">'+c+'</td>').join('')+'</tr>').join('');
+  const w = window.open('','_blank','width=900,height=700');
+  w.document.write('<html><head><title>'+title+'</title><style>body{font-family:Arial,sans-serif;font-size:13px}table{border-collapse:collapse;width:100%}@media print{button{display:none}}</style></head><body>');
+  w.document.write('<h2>'+title+'</h2><button onclick="window.print()">🖨️ Imprimir</button><br><br>');
+  w.document.write('<table><thead><tr>'+th+'</tr></thead><tbody>'+tr+'</tbody></table></body></html>');
+  w.document.close();
+}
+function exportLocalOrderDetailCSV(o) {
+  const headers = ['ARTICULO','Color','R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','Cantidad','Kilos','Precio','Subtotal'];
+  const rows = (o.local_order_items||[]).map(item=>{
+    const prod=(S.products||[]).find(p=>(p.product_colors||[]).some(c=>c.id===item.product_color_id));
+    const pc=(prod?.product_colors||[]).find(c=>c.id===item.product_color_id);
+    const rolls=(item.local_order_rolls||[]).slice().sort((a,b)=>a.roll_number-b.roll_number);
+    const totalKg=rolls.reduce((s,r)=>s+parseFloat(r.quantity||0),0);
+    const totalRolls=rolls.filter(r=>parseFloat(r.quantity||0)>0).length;
+    const price=parseFloat(item.price||0);
+    const rollKgs=Array.from({length:10},(_,i)=>{const r=rolls.find(x=>x.roll_number===i+1);return r?parseFloat(r.quantity||0):'';});
+    return [prod?.name||'',pc?.color||'',...rollKgs,totalRolls,totalKg.toFixed(2),price.toFixed(2),(totalKg*price).toFixed(2)];
+  });
+  downloadCSV((o.order_number||'pedido')+'_detalle.csv', headers, rows);
+}
+
 function vLocalActivos() {
-  const sq = (S.localActivosSearch||'').toLowerCase().trim();
+  const sq   = (S.localActivosSearch||'').toLowerCase().trim();
+  const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
   const activos = (S.localOrders||[]).filter(o => o.status === 'borrador' || o.status === 'pendiente');
-  const filtered = sq
+  let filtered = sq
     ? activos.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
     : activos;
+  filtered = sortLocalList(filtered, sort);
   const rows = filtered.length === 0
     ? `<tr><td colspan="7"><div class="empty-state"><div class="empty-icon">📋</div>${sq ? 'Sin resultados' : 'No hay pedidos activos'}</div></td></tr>`
     : filtered.map(o => {
-        const total = (o.local_order_items||[]).reduce((s,i) => {
-          const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
-          return s + kg*(parseFloat(i.price||0));
-        },0);
+        const total = calcOrderTotal(o);
         const stColor = o.status==='borrador' ? 'var(--gray-400)' : 'var(--blue)';
         const stLabel = o.status==='borrador' ? 'Borrador' : 'Pendiente';
         return `<tr style="cursor:pointer" data-local-order="${o.id}">
@@ -3079,19 +3138,31 @@ function vLocalActivos() {
           <td>${pill(o.move_type)}</td>
           <td><span style="background:${stColor};color:white;padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600">${stLabel}</span></td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
-          <td style="font-size:11px;color:var(--gray-400)">${(o.order_date||o.created_at||'').slice(0,10)}</td>
+          <td style="font-size:12px">${(o.order_date||o.created_at||'').slice(0,10)}</td>
           <td><button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
         </tr>`;
       }).join('');
   return `
   <div class="card">
-    <div class="card-header">
-      <input type="text" id="fLocalActivosSearch" placeholder="🔍 Buscar pedido o cliente..." value="${S.localActivosSearch||''}" style="max-width:280px">
-      <button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>
+    <div class="card-header" style="flex-wrap:wrap;gap:8px">
+      <input type="text" id="fLocalActivosSearch" placeholder="🔍 Buscar pedido o cliente..." value="${S.localActivosSearch||''}" style="max-width:230px">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-sm btn-secondary" id="btnExportActivosCSV" title="Exportar a Excel">📊 Excel</button>
+        <button class="btn btn-sm btn-secondary" id="btnExportActivosPDF" title="Imprimir / PDF">🖨️ PDF</button>
+        <button class="btn btn-primary" id="btnNewLocalOrder">+ Nuevo pedido</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th><th></th></tr></thead>
+        <thead><tr>
+          <th>N°</th>
+          ${thSort('Cliente','cliente',sort,'activos-sort')}
+          <th>Tipo</th>
+          <th>Estado</th>
+          ${thSort('Total','monto',sort,'activos-sort','right')}
+          ${thSort('Fecha','fecha',sort,'activos-sort')}
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -3139,7 +3210,7 @@ function mLocalOrderDetail() {
           <h3 style="margin:0">${o.order_number||'Pedido'} — Detalle</h3>
           <div style="color:var(--gray-400);font-size:13px;margin-top:2px">${o.clients?.name||''}&nbsp;·&nbsp;${pill(o.move_type)}&nbsp;·&nbsp;${(o.order_date||o.created_at||'').slice(0,10)}</div>
         </div>
-        <button class="modal-close" data-close-modal>✕</button>
+        <button class="modal-close" data-close>✕</button>
       </div>
       <div class="modal-body" style="overflow-x:auto;padding:0">
         <table style="width:100%;border-collapse:collapse;font-size:13px;min-width:860px">
@@ -3175,8 +3246,12 @@ function mLocalOrderDetail() {
           </tfoot>
         </table>
       </div>
-      <div class="modal-footer">
-        <button class="btn btn-secondary" data-close-modal>Cerrar</button>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:space-between;align-items:center">
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-secondary" id="btnDetailExportCSV">📊 Excel</button>
+          <button class="btn btn-sm btn-secondary" id="btnDetailExportPDF">🖨️ PDF</button>
+        </div>
+        <button class="btn btn-secondary" data-close>Cerrar</button>
       </div>
     </div>
   </div>`;
@@ -3185,20 +3260,19 @@ function mLocalOrderDetail() {
 // ── DESPACHADOS TAB ───────────────────────────────────────────────────────────
 function vLocalDespachados() {
   const filter = S.localDispFilter || 'revisar';
+  const sort   = S.localDispSort   || {col:'fecha', dir:'desc'};
   const statusMap = { revisar: 'despachado', check: 'revisado' };
   const targetStatus = statusMap[filter] || 'despachado';
   const sq = (S.localDispSearch||'').toLowerCase().trim();
   const list = (S.localOrders||[]).filter(o => o.status === targetStatus);
-  const filtered = sq
+  let filtered = sq
     ? list.filter(o => (o.order_number||'').toLowerCase().includes(sq) || (o.clients?.name||'').toLowerCase().includes(sq))
     : list;
+  filtered = sortLocalList(filtered, sort);
   const rows = filtered.length === 0
-    ? `<tr><td colspan="6"><div class="empty-state"><div class="empty-icon">📦</div>Sin pedidos en esta sección</div></td></tr>`
+    ? `<tr><td colspan="8"><div class="empty-state"><div class="empty-icon">📦</div>Sin pedidos en esta sección</div></td></tr>`
     : filtered.map(o => {
-        const total = (o.local_order_items||[]).reduce((s,i) => {
-          const kg = (i.local_order_rolls||[]).reduce((ss,r) => ss+parseFloat(r.quantity||0),0);
-          return s + kg*(parseFloat(i.price||0));
-        },0);
+        const total = calcOrderTotal(o);
         const devueltoBtn = (o.move_type === 'devolucion' && o.status === 'despachado')
           ? `<button class="btn btn-sm btn-success" data-devolver="${o.id}" style="padding:2px 8px;font-size:11px" onclick="event.stopPropagation()">✅ Devuelto</button>`
           : '';
@@ -3208,22 +3282,36 @@ function vLocalDespachados() {
           <td>${pill(o.move_type)}</td>
           <td>${pill(o.status)}</td>
           <td style="text-align:right">${total>0?`$ ${total.toLocaleString('es-AR',{minimumFractionDigits:2})}`:'—'}</td>
-          <td style="font-size:11px;color:var(--gray-400)">${(o.dispatched_at||o.created_at||'').slice(0,10)}</td>
+          <td style="font-size:12px">${(o.dispatched_at||o.order_date||o.created_at||'').slice(0,10)}</td>
           <td>${devueltoBtn}</td>
+          <td><button class="btn btn-sm btn-secondary" data-local-detail="${o.id}" onclick="event.stopPropagation()" style="padding:2px 10px;font-size:11px">🔍</button></td>
         </tr>`;
       }).join('');
   return `
   <div class="card">
-    <div class="card-header">
-      <div style="display:flex;gap:6px">
+    <div class="card-header" style="flex-wrap:wrap;gap:8px">
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn btn-sm ${filter==='revisar'?'btn-primary':'btn-secondary'}" data-local-disp-filter="revisar">⏳ Por revisar</button>
         <button class="btn btn-sm ${filter==='check'?'btn-primary':'btn-secondary'}" data-local-disp-filter="check">✅ Revisados</button>
       </div>
-      <input type="text" id="fLocalDispSearch" placeholder="🔍 Buscar..." value="${S.localDispSearch||''}" style="max-width:220px">
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <input type="text" id="fLocalDispSearch" placeholder="🔍 Buscar..." value="${S.localDispSearch||''}" style="max-width:190px">
+        <button class="btn btn-sm btn-secondary" id="btnExportDispCSV" title="Exportar a Excel">📊 Excel</button>
+        <button class="btn btn-sm btn-secondary" id="btnExportDispPDF" title="Imprimir / PDF">🖨️ PDF</button>
+      </div>
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>N°</th><th>Cliente</th><th>Tipo</th><th>Estado</th><th style="text-align:right">Total</th><th>Fecha</th></tr></thead>
+        <thead><tr>
+          <th>N°</th>
+          ${thSort('Cliente','cliente',sort,'disp-sort')}
+          <th>Tipo</th>
+          <th>Estado</th>
+          ${thSort('Total','monto',sort,'disp-sort','right')}
+          ${thSort('Fecha','fecha',sort,'disp-sort')}
+          <th></th>
+          <th></th>
+        </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
@@ -4931,7 +5019,97 @@ function bindAll() {
     S.localOrderStep = 1; S.err = null; S.modal = 'localOrder'; draw();
   }));
 
+  // Sort columns — Activos
+  document.querySelectorAll('[data-activos-sort]').forEach(th => th.addEventListener('click', () => {
+    const col = th.dataset.activosSort;
+    const cur = S.localActivosSort || {col:'fecha', dir:'desc'};
+    S.localActivosSort = {col, dir: cur.col===col && cur.dir==='asc' ? 'desc' : 'asc'};
+    draw();
+  }));
+
+  // Sort columns — Despachados
+  document.querySelectorAll('[data-disp-sort]').forEach(th => th.addEventListener('click', () => {
+    const col = th.dataset.dispSort;
+    const cur = S.localDispSort || {col:'fecha', dir:'desc'};
+    S.localDispSort = {col, dir: cur.col===col && cur.dir==='asc' ? 'desc' : 'asc'};
+    draw();
+  }));
+
+  // Export Activos — CSV
+  document.getElementById('btnExportActivosCSV')?.addEventListener('click', () => {
+    const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
+    const sq = (S.localActivosSearch||'').toLowerCase().trim();
+    const activos = (S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    let filtered = sq ? activos.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : activos;
+    filtered = sortLocalList(filtered, sort);
+    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
+    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', calcOrderTotal(o).toFixed(2), (o.order_date||o.created_at||'').slice(0,10)]);
+    downloadCSV('pedidos_activos.csv', headers, rows);
+  });
+
+  // Export Activos — PDF
+  document.getElementById('btnExportActivosPDF')?.addEventListener('click', () => {
+    const sort = S.localActivosSort || {col:'fecha', dir:'desc'};
+    const sq = (S.localActivosSearch||'').toLowerCase().trim();
+    const activos = (S.localOrders||[]).filter(o=>o.status==='borrador'||o.status==='pendiente');
+    let filtered = sq ? activos.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : activos;
+    filtered = sortLocalList(filtered, sort);
+    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
+    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', '$ '+calcOrderTotal(o).toLocaleString('es-AR',{minimumFractionDigits:2}), (o.order_date||o.created_at||'').slice(0,10)]);
+    printLocalTable('Pedidos Activos', headers, rows);
+  });
+
+  // Export Despachados — CSV
+  document.getElementById('btnExportDispCSV')?.addEventListener('click', () => {
+    const sort = S.localDispSort || {col:'fecha', dir:'desc'};
+    const filter = S.localDispFilter || 'revisar';
+    const statusMap = {revisar:'despachado', check:'revisado'};
+    const sq = (S.localDispSearch||'').toLowerCase().trim();
+    let list = (S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    let filtered = sq ? list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : list;
+    filtered = sortLocalList(filtered, sort);
+    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
+    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', calcOrderTotal(o).toFixed(2), (o.dispatched_at||o.order_date||o.created_at||'').slice(0,10)]);
+    downloadCSV('pedidos_despachados.csv', headers, rows);
+  });
+
+  // Export Despachados — PDF
+  document.getElementById('btnExportDispPDF')?.addEventListener('click', () => {
+    const sort = S.localDispSort || {col:'fecha', dir:'desc'};
+    const filter = S.localDispFilter || 'revisar';
+    const statusMap = {revisar:'despachado', check:'revisado'};
+    const sq = (S.localDispSearch||'').toLowerCase().trim();
+    let list = (S.localOrders||[]).filter(o=>o.status===(statusMap[filter]||'despachado'));
+    let filtered = sq ? list.filter(o=>(o.order_number||'').toLowerCase().includes(sq)||(o.clients?.name||'').toLowerCase().includes(sq)) : list;
+    filtered = sortLocalList(filtered, sort);
+    const headers = ['N°','Cliente','Tipo','Estado','Total','Fecha'];
+    const rows = filtered.map(o=>[o.order_number||'', o.clients?.name||'', o.move_type||'', o.status||'', '$ '+calcOrderTotal(o).toLocaleString('es-AR',{minimumFractionDigits:2}), (o.dispatched_at||o.order_date||o.created_at||'').slice(0,10)]);
+    printLocalTable('Pedidos Despachados', headers, rows);
+  });
+
+  // Export Detail — CSV / PDF
+  document.getElementById('btnDetailExportCSV')?.addEventListener('click', () => {
+    if (S.localOrderDraft) exportLocalOrderDetailCSV(S.localOrderDraft);
+  });
+  document.getElementById('btnDetailExportPDF')?.addEventListener('click', () => {
+    const o = S.localOrderDraft;
+    if (!o) return;
+    const headers = ['ARTICULO','Color','R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','Cant','Kilos','Precio','Subtotal'];
+    const rows = (o.local_order_items||[]).map(item=>{
+      const prod=(S.products||[]).find(p=>(p.product_colors||[]).some(c=>c.id===item.product_color_id));
+      const pc=(prod?.product_colors||[]).find(c=>c.id===item.product_color_id);
+      const rolls=(item.local_order_rolls||[]).slice().sort((a,b)=>a.roll_number-b.roll_number);
+      const totalKg=rolls.reduce((s,r)=>s+parseFloat(r.quantity||0),0);
+      const totalRolls=rolls.filter(r=>parseFloat(r.quantity||0)>0).length;
+      const price=parseFloat(item.price||0);
+      const rollKgs=Array.from({length:10},(_,i)=>{const r=rolls.find(x=>x.roll_number===i+1);const kg=r?parseFloat(r.quantity||0):0;return kg>0?kg:'';});
+      return [prod?.name||'',pc?.color||'',...rollKgs,totalRolls,totalKg.toFixed(2),price.toFixed(2),(totalKg*price).toFixed(2)];
+    });
+    printLocalTable((o.order_number||'Pedido')+' — Detalle', headers, rows);
+  });
+
   // Open local order detail modal (🔍 button)
+
   document.querySelectorAll('[data-local-detail]').forEach(btn => btn.addEventListener('click', () => {
     const o = S.localOrders.find(x=>x.id===btn.dataset.localDetail);
     if (!o) return;
